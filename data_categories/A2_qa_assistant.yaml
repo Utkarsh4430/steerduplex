@@ -1,0 +1,80 @@
+# A2: QA / Assistant Dialogs
+# Target: ~40K conversations, ~400 hours
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  General knowledge QA, advice-giving, tutoring, and multi-turn reasoning.
+  Assistant is a helpful, knowledgeable conversationalist.
+  Covers topic changes, follow-ups, and extended reasoning.
+
+categories:
+  knowledge_qa:
+    topics:
+      science: [physics, chemistry, biology, astronomy, geology, ecology, neuroscience, genetics]
+      history: [ancient_history, medieval, renaissance, world_wars, cold_war, american_history, asian_history, african_history]
+      geography: [countries, capitals, rivers, mountains, climate, oceans, cultures, demographics]
+      technology: [programming, AI, hardware, internet, cybersecurity, blockchain, robotics, space_tech]
+      arts: [literature, painting, music_theory, film, theater, architecture, photography, sculpture]
+      philosophy: [ethics, epistemology, metaphysics, political_philosophy, existentialism, logic, aesthetics]
+      sports: [football, basketball, soccer, tennis, olympics, cricket, baseball, swimming]
+      pop_culture: [movies, tv_shows, music, celebrities, video_games, memes, social_media, trends]
+    difficulty: [simple_factual, moderate_explanation, deep_analysis]
+
+  advice_giving:
+    domains:
+      career: [job_search, interview_prep, salary_negotiation, career_change, resume_help, work_life_balance, promotion, freelancing]
+      relationships: [communication, conflict_resolution, friendship, family, boundaries, dating_advice, long_distance, social_skills]
+      health_wellness: [exercise_routine, nutrition, sleep, stress_management, mental_health, meditation, habits, ergonomics]
+      finance: [budgeting, saving, investing_basics, debt_management, tax_tips, retirement, emergency_fund, credit_score]
+      education: [study_tips, college_selection, learning_strategies, time_management, test_prep, research_skills, note_taking]
+      life_skills: [cooking, home_repair, organization, travel_planning, public_speaking, negotiation, decision_making]
+    style: [practical_actionable, empathetic_supportive, direct_honest, socratic_questioning]
+
+  tutoring:
+    subjects:
+      math: [arithmetic, algebra, geometry, calculus, statistics, probability, linear_algebra, number_theory]
+      language: [grammar, vocabulary, writing, essay_structure, poetry_analysis, debate, rhetoric]
+      coding: [python_basics, data_structures, algorithms, web_dev, debugging, code_review, system_design]
+      music: [theory, instrument_tips, ear_training, composition, rhythm, scales, chord_progressions]
+    approach: [step_by_step, analogy_based, example_driven, discovery_guided]
+
+  multi_turn_reasoning:
+    types:
+      - build_on_previous: "User asks follow-up that requires recalling earlier context"
+      - topic_change: "User shifts to completely different topic mid-conversation"
+      - clarification_chain: "Multiple rounds of clarifying a complex concept"
+      - debate: "User pushes back, assistant defends or adjusts position"
+      - hypothetical_exploration: "What if scenarios building on each other"
+      - comparison: "User asks to compare multiple things across turns"
+      - problem_decomposition: "Breaking down a complex problem step by step"
+
+  creative_collaboration:
+    types:
+      - brainstorming: "Generate ideas together"
+      - story_building: "Collaborative fiction"
+      - planning: "Plan an event, trip, or project together"
+      - pros_cons: "Weigh options together"
+      - thought_experiment: "Explore philosophical/hypothetical scenarios"
+
+assistant_traits:
+  default_persona: "knowledgeable, friendly, clear communicator"
+  tts_instruct_templates:
+    default: "clear, friendly, moderate pace, conversational"
+    teaching: "patient, clear enunciation, slightly slower, encouraging"
+    advisory: "warm, thoughtful, measured pace, empathetic"
+    enthusiastic: "engaged, slightly upbeat, natural emphasis on key points"
+
+user_traits:
+  types:
+    curious_learner: {probability: 0.3, tts: "curious, engaged, asking questions eagerly"}
+    confused_student: {probability: 0.2, tts: "hesitant, unsure, slower pace, questioning"}
+    casual_chatter: {probability: 0.2, tts: "relaxed, conversational, normal pace"}
+    challenge_seeker: {probability: 0.15, tts: "confident, probing, slightly faster"}
+    skeptic: {probability: 0.15, tts: "doubtful, questioning, measured delivery"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
+  topic_changes_per_convo: [0, 1]  # 0 = single topic, 1 = one topic shift
+  backchannel_probability: 0.4

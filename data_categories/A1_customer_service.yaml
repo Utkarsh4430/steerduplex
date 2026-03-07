@@ -1,0 +1,85 @@
+# A1: Customer Service Dialogs
+# Target: ~50K conversations, ~800 hours
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Multi-turn customer service interactions across 50+ domains.
+  Assistant plays a service agent with domain-specific knowledge.
+  User has a problem, question, or request.
+
+domains:
+  restaurant:
+    scenarios: [reservation, complaint_food, complaint_service, menu_inquiry, delivery_issue, catering_request, gift_card, loyalty_program, allergy_accommodation, wait_time]
+  bank:
+    scenarios: [account_inquiry, transaction_dispute, loan_application, card_lost, wire_transfer, overdraft, account_opening, interest_rate, fraud_alert, mortgage_question]
+  healthcare:
+    scenarios: [appointment_scheduling, insurance_verification, prescription_refill, test_results, billing_dispute, referral_request, symptom_triage, telehealth_setup, medical_records, copay_inquiry]
+  airlines:
+    scenarios: [flight_booking, cancellation, rebooking, baggage_lost, seat_upgrade, delay_compensation, mileage_inquiry, special_assistance, pet_travel, group_booking]
+  hotel:
+    scenarios: [room_booking, complaint_noise, checkout_issue, room_upgrade, amenity_request, loyalty_points, event_booking, late_checkout, lost_property, accessibility_request]
+  tech_support:
+    scenarios: [internet_outage, device_setup, software_bug, password_reset, billing_error, service_upgrade, hardware_replacement, data_recovery, app_crash, compatibility_issue]
+  insurance:
+    scenarios: [claim_filing, policy_inquiry, premium_payment, coverage_question, accident_report, policy_renewal, beneficiary_change, deductible_explanation, denial_appeal, multi_policy_discount]
+  telecom:
+    scenarios: [plan_change, network_issue, bill_dispute, phone_upgrade, international_roaming, data_overage, contract_cancellation, family_plan, voicemail_setup, number_porting]
+  retail:
+    scenarios: [return_request, order_tracking, product_inquiry, size_exchange, coupon_issue, out_of_stock, warranty_claim, price_match, gift_wrapping, bulk_order]
+  automotive:
+    scenarios: [service_appointment, recall_notice, warranty_repair, parts_order, roadside_assistance, lease_inquiry, trade_in_value, test_drive_booking, financing_question, oil_change]
+  real_estate:
+    scenarios: [property_inquiry, viewing_schedule, offer_submission, mortgage_preapproval, inspection_issue, closing_timeline, lease_terms, maintenance_request, HOA_question, move_in_date]
+  education:
+    scenarios: [enrollment, course_inquiry, financial_aid, transcript_request, tuition_payment, schedule_change, advisor_appointment, graduation_requirement, library_access, campus_housing]
+  government:
+    scenarios: [license_renewal, permit_application, tax_question, benefits_inquiry, passport_application, voter_registration, complaint_filing, records_request, zoning_question, court_date]
+  utilities:
+    scenarios: [billing_dispute, service_outage, meter_reading, payment_plan, new_connection, disconnect_request, energy_audit, rebate_program, usage_inquiry, emergency_report]
+  fitness_gym:
+    scenarios: [membership_signup, class_booking, trainer_inquiry, cancellation, freeze_membership, equipment_complaint, hours_inquiry, guest_pass, personal_training, group_discount]
+  travel_agency:
+    scenarios: [package_booking, itinerary_change, travel_insurance, visa_assistance, hotel_complaint, tour_inquiry, honeymoon_planning, budget_trip, last_minute_deal, travel_advisory]
+  subscription_service:
+    scenarios: [cancel_subscription, upgrade_plan, billing_error, content_request, sharing_plan, free_trial, refund, feature_request, technical_issue, account_recovery]
+  pet_services:
+    scenarios: [vet_appointment, grooming_booking, boarding_reservation, vaccination_record, food_recommendation, emergency_inquiry, adoption_process, training_class, insurance_claim, medication_refill]
+  home_services:
+    scenarios: [plumber_booking, electrician_schedule, cleaning_service, pest_control, hvac_repair, painting_estimate, landscaping, security_install, appliance_repair, moving_service]
+  legal_services:
+    scenarios: [consultation_booking, case_status, document_request, fee_inquiry, court_date, power_of_attorney, contract_review, small_claims, mediation, notarization]
+
+assistant_traits:
+  default_tone: [professional, patient, helpful]
+  default_style: [formal, semi-formal]
+  tts_instruct_templates:
+    professional: "clear, professional tone, moderate pace, confident delivery"
+    warm_professional: "warm and professional, friendly but businesslike, moderate pace"
+    patient: "patient, understanding tone, slightly slower pace, calm delivery"
+    empathetic: "empathetic and understanding, gentle tone, attentive delivery"
+
+user_traits:
+  mood_distribution:
+    neutral: 0.3
+    frustrated: 0.2
+    confused: 0.15
+    polite: 0.15
+    rushed: 0.1
+    angry: 0.05
+    happy: 0.05
+  tts_instruct_templates:
+    neutral: "conversational, normal pace, matter-of-fact"
+    frustrated: "frustrated, slightly tense, occasional sighs"
+    confused: "uncertain, hesitant, questioning intonation"
+    polite: "polite, clear, measured pace"
+    rushed: "hurried, slightly breathless, faster pace"
+    angry: "angry, raised voice, clipped words"
+    happy: "upbeat, friendly, relaxed pace"
+
+conversation_structure:
+  min_turns: 4
+  max_turns: 10
+  typical_turns: 6
+  includes_greeting: true
+  includes_resolution: true
+  backchannel_probability: 0.3

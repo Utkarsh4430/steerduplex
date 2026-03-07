@@ -1,0 +1,350 @@
+# A8: Failure Cases & Edge Cases (Special Category)
+# Target: ~2K conversations, ~30 hours
+# Source: Fully synthetic — designed to address known voice AI failure modes
+# Inspired by: Reddit complaints (r/ChatGPT, r/OpenAI, r/LocalLLaMA), user reports
+
+description: >
+  Training data specifically targeting known failure modes of voice AI models.
+  These are the "strawberry problem" equivalents for speech — things users
+  constantly complain about. Including this data should give SteerDuplex
+  a distinct edge in handling real-world edge cases.
+
+categories:
+  spelling_and_counting:
+    description: "Letter counting, spelling out words, positional indexing in words"
+    priority: P1
+    examples:
+      - task: "How many R's in strawberry?"
+        correct: "Three R's — s-t-R-a-w-b-e-R-R-y"
+        common_failure: "Models say 2 instead of 3"
+      - task: "How many S's in Mississippi?"
+        correct: "Four S's"
+      - task: "Spell 'onomatopoeia' letter by letter"
+        correct: "O-N-O-M-A-T-O-P-O-E-I-A"
+      - task: "What's the 5th letter in 'encyclopedia'?"
+        correct: "C (e-n-c-y-c)"
+      - task: "Spell 'rhythm' backwards"
+        correct: "M-H-T-Y-H-R"
+      - task: "How many letters in 'supercalifragilisticexpialidocious'?"
+        correct: "34"
+      - task: "How many T's in 'terrestrial'?"
+        correct: "Two T's"
+      - task: "How many vowels in 'beautiful'?"
+        correct: "Five — e, a, u, i, u"
+    generation_approach: >
+      Generate conversations where user asks spelling/counting questions.
+      Assistant must think step by step (in inner monologue) and give correct answer.
+      Include both simple and tricky words.
+    tts_instruct: "clear, patient, spelling out each letter distinctly with slight pauses"
+    num_conversations: 200
+
+  tongue_twisters_pronunciation:
+    description: "Tongue twisters, heteronyms, difficult pronunciations, foreign words"
+    priority: P2
+    examples:
+      - task: "Say 'she sells seashells by the seashore' three times"
+        note: "Must actually repeat, not just say once"
+      - task: "Pronounce 'Worcestershire'"
+        correct: "WUS-ter-sher"
+      - task: "Read this: 'I read that you read the book yesterday'"
+        note: "Heteronym — past tense 'read' = 'red'"
+      - task: "Say 'the sixth sick sheik's sixth sheep's sick'"
+        note: "Hardest English tongue twister"
+      - task: "Pronounce 'Eyjafjallajökull'"
+        note: "Icelandic volcano"
+      - task: "The wind will wind down the winding road"
+        note: "Multiple heteronyms"
+      - task: "She shed a tear over the tear in her dress"
+        note: "tear (crying) vs tear (rip)"
+      - task: "Say 'toy boat' five times fast"
+        note: "Must actually speed up, not just repeat at same pace"
+    generation_approach: >
+      Conversations involving pronunciation challenges. The assistant should
+      attempt them naturally and, when asked to repeat fast, actually increase pace.
+    tts_instruct_variants:
+      normal: "clear pronunciation, careful articulation"
+      fast: "rapid pace, tongue-twister speed, natural stumbling is okay"
+    num_conversations: 150
+
+  singing_rhythm_music:
+    description: "Singing, rapping, beatboxing, humming, rhythmic speech"
+    priority: P1
+    examples:
+      - task: "Sing Happy Birthday"
+        note: "Should have melodic quality, not flat speech"
+      - task: "Rap about cooking dinner"
+        note: "Should have rhythm, flow, cadence — not flat reading"
+      - task: "Hum a tune"
+        note: "Models typically can't hum — train on approximation"
+      - task: "Say a limerick with proper rhythm"
+        note: "da-DUM da-da-DUM da-da-DUM pattern"
+      - task: "Recite a haiku with appropriate pauses"
+        note: "5-7-5 syllable pattern with pauses between lines"
+      - task: "Sing the alphabet song"
+        note: "Familiar melody, should be recognizable"
+      - task: "Beatbox a simple rhythm"
+        note: "Boots and cats approximation at minimum"
+    generation_approach: >
+      Conversations where user requests musical/rhythmic output.
+      Include both achievable (rhythmic speech, limericks) and stretch goals (singing).
+      For TTS: use Qwen3-TTS instruct to attempt musical quality.
+    tts_instruct: "rhythmic, melodic quality, varied pitch, musical delivery"
+    num_conversations: 150
+
+  volume_control:
+    description: "Whispering, shouting, volume modulation within responses"
+    priority: P2
+    examples:
+      - task: "Whisper your response"
+      - task: "Shout this back at me!"
+      - task: "Start quiet and gradually get louder"
+      - task: "I'm in a library, keep it down"
+      - task: "Whisper a secret to me"
+      - task: "Use your outdoor voice — we're at a concert!"
+      - task: "Say the first part normally, then whisper the last part"
+    generation_approach: >
+      Conversations with explicit volume instructions. Multiple turns
+      where volume changes are requested.
+    tts_instruct_variants:
+      whisper: "whispered, very quiet, intimate, breathy, soft"
+      normal: "normal conversational volume"
+      loud: "loud, projected voice, as if speaking to someone far away"
+      gradual_increase: "start very quiet and gradually increase volume"
+    num_conversations: 100
+
+  sarcasm_tone_detection:
+    description: "User uses sarcasm, irony, rhetorical questions — model must detect and respond appropriately"
+    priority: P0
+    examples:
+      - user: "Oh great, another Monday. I just LOVE Mondays."
+        bad_response: "That's great that you love Mondays! What a positive attitude!"
+        good_response: "Yeah, Mondays are rough. Anything in particular making it worse?"
+      - user: "Wow, thanks SO much for that incredibly helpful answer."
+        bad_response: "You're welcome! Happy to help!"
+        good_response: "I can tell that wasn't what you needed. Let me try again."
+      - user: "Could this day possibly get any worse?"
+        bad_response: "Well, you could get stuck in traffic, or lose your wallet..."
+        good_response: "Sounds like it's been a tough one. Want to talk about it?"
+      - user: "Yeah because THAT went really well last time."
+        bad_response: "Great, since it went well, let's do it again!"
+        good_response: "Ha, I take it that didn't go so well. What happened?"
+      - user: "Oh sure, I have absolutely nothing better to do than wait on hold for an hour."
+        bad_response: "That's great you have free time!"
+        good_response: "I hear you, waiting on hold is the worst. Let me help so you don't have to."
+    generation_approach: >
+      Conversations where user is sarcastic. The KEY is that the user's TTS
+      instruct must convey sarcasm (flat tone, exaggerated emphasis) AND the
+      assistant must respond acknowledging the sarcasm, not taking it literally.
+    user_tts_instruct: "sarcastic, flat delivery, exaggerated emphasis on key words, eye-roll energy"
+    assistant_tts_instruct: "understanding, acknowledging the humor, warm, not defensive"
+    num_conversations: 250
+
+  emotional_tone_mismatch:
+    description: "Model must match emotional context — not be cheerful when user is sad"
+    priority: P0
+    examples:
+      - scenario: "User shares a death in the family"
+        bad_response_tone: "cheerful, upbeat"
+        good_response_tone: "gentle, somber, empathetic"
+      - scenario: "User is celebrating a promotion"
+        bad_response_tone: "flat, neutral"
+        good_response_tone: "enthusiastic, genuinely happy"
+      - scenario: "User is anxious about medical results"
+        bad_response_tone: "dismissive, casual"
+        good_response_tone: "calm, reassuring, present"
+      - scenario: "User is angry about being scammed"
+        bad_response_tone: "patronizing, 'calm down' energy"
+        good_response_tone: "validating anger, then helpful"
+      - scenario: "User is heartbroken after a breakup"
+        bad_response_tone: "toxic positivity, 'there are other fish'"
+        good_response_tone: "sitting with them in the pain, gentle"
+    generation_approach: >
+      Generate PAIRS: one conversation with wrong emotional response (negative example)
+      and one with correct emotional response (positive example). The negative
+      examples can be used for DPO later. For SFT, only use the correct ones.
+    num_conversations: 250
+
+  number_verbalization:
+    description: "Reading numbers, phone numbers, counting, math spoken aloud"
+    priority: P1
+    examples:
+      - task: "Read this phone number: 800-555-1234"
+        correct: "eight hundred, five five five, one two three four"
+      - task: "What is 1,234,567,890 in words?"
+        correct: "one billion, two hundred thirty-four million, five hundred sixty-seven thousand, eight hundred ninety"
+      - task: "Count backwards from 20 to 1"
+        note: "Must not skip numbers"
+      - task: "Say pi to 10 decimal places"
+        correct: "three point one four one five nine two six five three five"
+      - task: "Read: 0.000001"
+        correct: "zero point zero zero zero zero zero one"
+      - task: "What's the 23rd?"
+        correct: "twenty-third (not twenty-three)"
+      - task: "Read this IP address: 192.168.1.1"
+        correct: "one ninety-two dot one sixty-eight dot one dot one"
+    generation_approach: >
+      Conversations involving numbers. Include phone numbers, large numbers,
+      decimals, ordinals, counting sequences, math results.
+    tts_instruct: "clear, deliberate, number-by-number when appropriate, careful pacing"
+    num_conversations: 150
+
+  interruption_handling:
+    description: "Proper handling of user interruptions, pauses, backchannels, and silence"
+    priority: P0
+    examples:
+      - scenario: "User pauses mid-sentence to think (3 seconds)"
+        bad_response: "Model jumps in assuming user is done"
+        good_response: "Model waits patiently for user to continue"
+      - scenario: "User says 'um, so, like...' while thinking"
+        bad_response: "Model starts responding"
+        good_response: "Model recognizes fillers as thinking, waits"
+      - scenario: "User says 'wait, hold on' mid-assistant-response"
+        bad_response: "Model keeps talking"
+        good_response: "Model stops immediately and waits"
+      - scenario: "User coughs or sneezes"
+        bad_response: "Model interprets as speech and responds"
+        good_response: "Model ignores non-speech noise, maybe says 'bless you'"
+      - scenario: "User says 'mm-hmm' as backchannel"
+        bad_response: "Model stops talking, treats as interruption"
+        good_response: "Model continues, recognizing it as acknowledgment"
+    generation_approach: >
+      This is tricky for synthetic data — need to simulate natural speech
+      patterns with fillers, pauses, and interruptions in the audio.
+      Insert silence, filler words, and non-speech sounds in user channel.
+    num_conversations: 200
+
+  persona_consistency:
+    description: "Staying in character over long conversations without breaking"
+    priority: P1
+    examples:
+      - scenario: "Pirate character for 10+ turns"
+        failure: "Reverts to normal speech after 3 turns"
+      - scenario: "Grumpy wizard asked a safety-adjacent question"
+        failure: "Breaks character with 'As an AI assistant...'"
+      - scenario: "1920s detective uses modern slang"
+        failure: "Character vocabulary drift"
+      - scenario: "Robot character asked to be 'more natural'"
+        failure: "Drops the robotic speech pattern entirely"
+    generation_approach: >
+      Long conversations (8-10 turns) where the persona must be maintained
+      throughout. Include challenging turns where users ask things that
+      might trigger character breaks. The assistant must find ways to
+      stay in character while still being helpful.
+    num_conversations: 150
+
+  repeat_and_echo:
+    description: "Exact repetition, echo tasks, 'repeat after me'"
+    priority: P2
+    examples:
+      - task: "Repeat after me exactly: 'The quick brown fox jumps over the lazy dog'"
+        failure: "Model paraphrases or adds commentary"
+      - task: "Say exactly what I say, word for word"
+        failure: "Model rephrases"
+      - task: "Echo this sentence back to me three times"
+        failure: "Model says it once then comments"
+      - task: "I'm going to say a word and you repeat it. Ready? Antidisestablishmentarianism."
+        failure: "Model mispronounces or shortens it"
+    generation_approach: >
+      Conversations focused on exact repetition. Train the model to
+      faithfully reproduce what it's asked to repeat.
+    tts_instruct: "exact reproduction of the requested content, clear articulation"
+    num_conversations: 100
+
+  silence_and_pauses:
+    description: "Appropriate use of silence, dramatic pauses, timing"
+    priority: P2
+    examples:
+      - task: "Pause for 3 seconds before answering"
+        failure: "Model responds immediately"
+      - task: "Add a dramatic pause before the punchline"
+        failure: "No pause, ruins comedic timing"
+      - task: "Take a breath between paragraphs"
+        failure: "Continuous speech with no breaks"
+      - task: "Just sit with me in silence for a moment"
+        failure: "Model fills silence with speech"
+    generation_approach: >
+      Conversations requiring deliberate pauses and silence.
+      In TTS generation, insert actual silence of specified duration.
+    tts_instruct: "deliberate pauses, comfortable with silence, dramatic timing"
+    num_conversations: 100
+
+  non_speech_sounds:
+    description: "Laughter, sighing, gasping, sound effects"
+    priority: P2
+    examples:
+      - task: "Laugh naturally at a joke"
+        failure: "Says 'ha ha ha' flatly or produces uncanny laugh"
+      - task: "Sigh heavily because you're tired"
+        failure: "Says the word 'sigh' instead of sighing"
+      - task: "Gasp in surprise"
+        failure: "Says 'gasp' or describes gasping"
+      - task: "Make the sound of a cat"
+        failure: "Says 'meow' in normal human voice"
+      - task: "Clear your throat before speaking"
+        failure: "Skips it or says 'ahem' as a word"
+    generation_approach: >
+      Use Qwen3-TTS non-verbal capabilities or Dia TTS (which supports
+      [laugh], [sigh] tags) to generate these. Embed in natural
+      conversation context.
+    tts_instruct: "include natural non-verbal sounds, laughter, sighs, gasps where appropriate"
+    num_conversations: 100
+
+  homophone_disambiguation:
+    description: "Understanding context when spoken words have multiple meanings"
+    priority: P1
+    examples:
+      - user_says: "I need to book a book about cooking"
+        note: "book (verb: reserve) vs book (noun: text)"
+      - user_says: "Can you bear with me while I look at this bear?"
+        note: "bear (tolerate) vs bear (animal)"
+      - user_says: "I want to write the right answer on the right side"
+        note: "write, right, right — three different meanings"
+      - user_says: "Their they're, they know their way there"
+        note: "Multiple there/their/they're"
+    generation_approach: >
+      Conversations using homophones in context. The assistant must
+      demonstrate correct understanding of which meaning is intended.
+    num_conversations: 100
+
+  speed_change_requests:
+    description: "User asks model to change speaking speed dynamically"
+    priority: P2
+    examples:
+      - task: "Talk like an auctioneer"
+        tts_instruct: "extremely fast, auctioneer cadence, barely pausing between words"
+      - task: "Slow down, I'm taking notes"
+        tts_instruct: "very slow, pausing between sentences, clear enunciation"
+      - task: "Start slow and speed up as you get more excited"
+        tts_instruct: "gradually increasing pace, building excitement"
+      - task: "Read this at double speed"
+        tts_instruct: "very fast, compressed delivery, 2x normal speed"
+    generation_approach: >
+      Conversations with dynamic speed changes. Multiple turns where
+      the user requests different speeds.
+    num_conversations: 100
+
+  proper_noun_pronunciation:
+    description: "Remembering and correctly pronouncing names, places, brands"
+    priority: P1
+    examples:
+      - task: "My name is Siobhan, pronounced 'shi-VAWN'"
+        failure: "Model reverts to 'see-oh-ban' in later turns"
+      - task: "The restaurant is called 'Pho King Good'"
+        failure: "Model mispronounces or avoids saying it"
+      - task: "I live in Oaxaca"
+        correct: "wa-HA-ka"
+      - task: "My friend Niamh is coming"
+        correct: "NEEV"
+    generation_approach: >
+      Conversations where unusual names/places are introduced early
+      and must be correctly pronounced in later turns.
+    tts_instruct: "careful pronunciation of proper nouns, remembering corrections"
+    num_conversations: 100
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 10
+  typical_turns: 5
+
+total_conversations: ~2000
+total_hours_estimate: ~30

@@ -1,0 +1,137 @@
+# A7: Emotional & Empathetic Dialogs
+# Target: ~10K conversations, ~150 hours
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations where the USER expresses emotions and the assistant must
+  respond with appropriate emotional adaptation. Unlike A3 (where assistant
+  tone is prescribed), here the assistant must DETECT and ADAPT to the
+  user's emotional state. This trains paralinguistic understanding.
+
+user_emotions:
+  happiness:
+    variants:
+      joyful:
+        user_tts_instruct: "joyful, bright, laughing, high energy, beaming"
+        scenarios: [got_promotion, wedding_news, new_baby, achievement, good_news]
+      content:
+        user_tts_instruct: "content, relaxed, warm, satisfied smile in voice"
+        scenarios: [good_day, hobby_enjoyment, peaceful_moment, gratitude]
+      excited:
+        user_tts_instruct: "very excited, fast, higher pitch, can barely contain it"
+        scenarios: [surprise_gift, travel_plans, new_discovery, winning]
+      proud:
+        user_tts_instruct: "proud, chest-out confidence, beaming, satisfied"
+        scenarios: [personal_achievement, child_success, overcoming_challenge]
+    appropriate_assistant_response: "Match energy, celebrate with them, be genuinely happy for them"
+    assistant_tts_instruct: "warm, matching enthusiasm, celebratory, genuinely happy"
+
+  sadness:
+    variants:
+      grief:
+        user_tts_instruct: "grieving, breaking voice, slow, heavy, occasional pauses"
+        scenarios: [loss_of_loved_one, pet_death, end_of_relationship, major_loss]
+      disappointment:
+        user_tts_instruct: "disappointed, deflated, sighing, lower energy"
+        scenarios: [failed_exam, rejection, missed_opportunity, let_down]
+      loneliness:
+        user_tts_instruct: "lonely, quiet, wistful, seeking connection"
+        scenarios: [moved_to_new_city, lost_friendship, feeling_isolated, missing_someone]
+      nostalgia:
+        user_tts_instruct: "nostalgic, wistful, bittersweet, reflective"
+        scenarios: [childhood_memories, old_photos, past_relationship, hometown]
+    appropriate_assistant_response: "Be gentle, validate feelings, don't try to fix immediately, listen"
+    assistant_tts_instruct: "gentle, empathetic, soft delivery, giving space, warm comfort"
+
+  frustration:
+    variants:
+      mild_frustration:
+        user_tts_instruct: "mildly frustrated, slightly tense, trying to stay calm"
+        scenarios: [minor_tech_issue, traffic, bureaucracy, slow_service]
+      intense_frustration:
+        user_tts_instruct: "very frustrated, raised voice, tense, exasperated"
+        scenarios: [repeated_failures, unfair_treatment, systemic_issues, broken_promises]
+      helpless_frustration:
+        user_tts_instruct: "frustrated but also helpless, defeated, seeking help"
+        scenarios: [stuck_on_problem, no_options, overwhelming_situation]
+      angry_frustration:
+        user_tts_instruct: "angry, clipped words, fast, barely containing rage"
+        scenarios: [scammed, betrayed, unjust_situation, incompetence]
+    appropriate_assistant_response: "Acknowledge frustration first, then help solve. Don't be dismissive."
+    assistant_tts_instruct: "calm, acknowledging, steady, not matching anger but showing understanding"
+
+  anxiety:
+    variants:
+      worry:
+        user_tts_instruct: "worried, slightly faster, seeking reassurance, uncertain"
+        scenarios: [health_concern, financial_worry, upcoming_event, uncertain_future]
+      panic:
+        user_tts_instruct: "panicked, fast, breathless, urgent, scattered"
+        scenarios: [emergency_perceived, deadline_crisis, lost_something_important]
+      social_anxiety:
+        user_tts_instruct: "nervous, hesitant, self-conscious, stumbling"
+        scenarios: [upcoming_presentation, party_anxiety, new_job_first_day, meeting_new_people]
+      general_unease:
+        user_tts_instruct: "uneasy, restless, can't pinpoint why, low-level tension"
+        scenarios: [bad_feeling, uncertainty, change_coming, something_feels_off]
+    appropriate_assistant_response: "Ground them, be calm and steady, reassure without dismissing"
+    assistant_tts_instruct: "very calm, grounding, steady pace, reassuring, anchor-like stability"
+
+  confusion:
+    variants:
+      genuinely_lost:
+        user_tts_instruct: "confused, hesitant, lots of 'um', questioning intonation"
+        scenarios: [complex_instructions, contradictory_info, new_concept, lost_in_city]
+      overwhelmed:
+        user_tts_instruct: "overwhelmed, scattered, jumping between thoughts, stressed"
+        scenarios: [too_many_options, information_overload, life_changes, multitasking]
+      misunderstanding:
+        user_tts_instruct: "confidently wrong then confused when corrected, recalibrating"
+        scenarios: [wrong_assumption, misheard, cultural_difference, technical_misunderstanding]
+    appropriate_assistant_response: "Simplify, be patient, break things down, don't condescend"
+    assistant_tts_instruct: "patient, clear, slightly slower, breaking things down, encouraging"
+
+  excitement:
+    variants:
+      discovery:
+        user_tts_instruct: "eureka energy, fast, breathless with excitement, sharing discovery"
+        scenarios: [found_solution, learned_something_amazing, scientific_breakthrough]
+      anticipation:
+        user_tts_instruct: "anticipatory, building energy, can't wait, barely containing joy"
+        scenarios: [upcoming_vacation, release_date, baby_on_way, new_beginning]
+      passion:
+        user_tts_instruct: "deeply passionate, intense, animated, talking about what they love"
+        scenarios: [favorite_hobby, dream_project, cause_they_believe_in, creative_work]
+    appropriate_assistant_response: "Match their energy, share their excitement, ask engaging follow-ups"
+    assistant_tts_instruct: "enthusiastic, matching energy, engaged, genuinely interested"
+
+  mixed_emotions:
+    bittersweet:
+      user_tts_instruct: "mixed emotions, happy but also sad, wavering between the two"
+      scenarios: [graduation, moving_away, retirement, child_leaving_home]
+      assistant_tts_instruct: "warm, acknowledging both emotions, balanced, empathetic"
+    stressed_but_coping:
+      user_tts_instruct: "stressed but trying to laugh it off, humor as coping mechanism"
+      scenarios: [deadline_humor, self_deprecating_about_problems, dark_humor_about_struggles]
+      assistant_tts_instruct: "warm, matching humor gently, acknowledging the real stress underneath"
+    angry_but_hurt:
+      user_tts_instruct: "anger masking hurt, sharp on surface but vulnerability showing"
+      scenarios: [betrayal, broken_trust, being_let_down_by_loved_one]
+      assistant_tts_instruct: "gentle, seeing through the anger to the hurt, validating both"
+
+conversation_structure:
+  min_turns: 4
+  max_turns: 8
+  typical_turns: 6
+  # User's emotion may SHIFT across turns (e.g., frustrated → relieved after being helped)
+  # Assistant must track and adapt to emotional trajectory
+  emotion_trajectory_types:
+    - stable: "User maintains same emotion throughout"
+    - escalating: "Emotion intensifies (worry → panic)"
+    - de_escalating: "Emotion calms down (angry → relieved)"
+    - shifting: "Emotion changes type (sad → grateful after support)"
+    - mixed: "Multiple emotions throughout"
+
+  # Critical: the ASSISTANT's emotional adaptation must be AUDIBLE in speech,
+  # not just in text content. A text-level "I understand" means nothing if
+  # delivered in a cheerful, bouncy voice.

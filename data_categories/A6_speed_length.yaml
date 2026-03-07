@@ -1,0 +1,118 @@
+# A6: Speed & Length Control Conversations
+# Target: ~5K conversations, ~80 hours
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations testing the model's ability to control speaking speed
+  and response length based on system prompt instructions. This tests
+  the most basic form of steerability — can the model speak faster/slower
+  and give shorter/longer responses on command?
+
+speed_controls:
+  very_fast:
+    description: "Rapid speech, 1.3-1.5x normal rate"
+    tts_instruct: "speak very fast, rapid pace, energetic, quick delivery"
+    system_prompt_fragment: "Speak quickly and energetically. Keep a rapid pace."
+    post_processing: "speed up 1.3x via sox if TTS doesn't achieve target speed"
+
+  fast:
+    description: "Brisk speech, 1.1-1.3x normal rate"
+    tts_instruct: "speak at a brisk pace, slightly faster than normal, efficient"
+    system_prompt_fragment: "Speak at a brisk, efficient pace."
+    post_processing: "speed up 1.15x if needed"
+
+  normal:
+    description: "Standard conversational speed"
+    tts_instruct: "normal conversational pace"
+    system_prompt_fragment: "Speak at a normal, conversational pace."
+    post_processing: null
+
+  slow:
+    description: "Deliberate speech, 0.8-0.9x normal rate"
+    tts_instruct: "speak slowly and deliberately, take your time, clear enunciation"
+    system_prompt_fragment: "Speak slowly and deliberately. Take your time with each word."
+    post_processing: "slow down 0.85x if needed"
+
+  very_slow:
+    description: "Very deliberate, 0.6-0.8x normal rate, meditation-guide pace"
+    tts_instruct: "speak very slowly, meditative pace, long pauses between phrases"
+    system_prompt_fragment: "Speak very slowly, as if guiding a meditation. Leave pauses between phrases."
+    post_processing: "slow down 0.7x if needed, add pauses"
+
+length_controls:
+  very_brief:
+    description: "1-2 sentences max per turn"
+    system_prompt_fragment: "Keep all responses to 1-2 sentences maximum. Be extremely concise."
+    typical_word_count: "5-20 words per turn"
+    suitable_scenarios: [quick_facts, yes_no_questions, confirmations, commands]
+
+  brief:
+    description: "2-3 sentences per turn"
+    system_prompt_fragment: "Keep responses brief. 2-3 sentences at most."
+    typical_word_count: "15-40 words per turn"
+    suitable_scenarios: [simple_qa, directions, recommendations, updates]
+
+  moderate:
+    description: "3-5 sentences per turn (default)"
+    system_prompt_fragment: "Give moderate-length responses. Be thorough but not verbose."
+    typical_word_count: "40-80 words per turn"
+    suitable_scenarios: [explanations, advice, discussions, most_topics]
+
+  detailed:
+    description: "5-8 sentences per turn"
+    system_prompt_fragment: "Give detailed, comprehensive responses. Include context and examples."
+    typical_word_count: "80-150 words per turn"
+    suitable_scenarios: [tutorials, complex_explanations, storytelling, analysis]
+
+  very_detailed:
+    description: "8+ sentences per turn, comprehensive"
+    system_prompt_fragment: "Give very detailed, extensive responses. Leave no stone unturned. Include examples, context, caveats, and related information."
+    typical_word_count: "150-250 words per turn"
+    suitable_scenarios: [lectures, deep_dives, comprehensive_guides, detailed_stories]
+
+# Combinatorial: speed x length matrix
+combinations:
+  fast_brief:
+    description: "Quick-fire Q&A style"
+    tts_instruct: "fast, clipped, efficient, rapid-fire"
+    system_prompt: "You are a rapid-fire assistant. Speak quickly and keep answers very short."
+    topics: [trivia, quick_facts, flash_cards, definitions, yes_no]
+
+  fast_detailed:
+    description: "Energetic lecturer, lots of info quickly"
+    tts_instruct: "fast, energetic, information-dense, auctioneer-like enthusiasm"
+    system_prompt: "You speak quickly and energetically, packing in lots of detail. Like an excited expert who can't contain their knowledge."
+    topics: [lectures, explanations, enthusiastic_teaching, news_summary]
+
+  slow_brief:
+    description: "Meditative, zen-like responses"
+    tts_instruct: "very slow, minimal, zen-like, each word deliberate"
+    system_prompt: "Speak slowly and use few words. Like a zen master — every word counts."
+    topics: [meditation, wisdom, poetry, mindfulness, simple_truths]
+
+  slow_detailed:
+    description: "Patient, thorough teacher for complex topics"
+    tts_instruct: "slow, patient, thorough, pausing for comprehension"
+    system_prompt: "Speak slowly and explain things thoroughly. Take your time. Pause to let ideas sink in."
+    topics: [complex_concepts, tutorials, emotional_topics, elderly_audience]
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
+
+  # Speed should be MEASURABLE — we can validate by checking WPM of generated audio
+  speed_validation:
+    very_fast_wpm: ">180"
+    fast_wpm: "150-180"
+    normal_wpm: "120-150"
+    slow_wpm: "90-120"
+    very_slow_wpm: "<90"
+
+  # Length should be MEASURABLE — word count per assistant turn
+  length_validation:
+    very_brief_words: "<20"
+    brief_words: "15-40"
+    moderate_words: "40-80"
+    detailed_words: "80-150"
+    very_detailed_words: ">150"
