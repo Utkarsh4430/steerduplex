@@ -1,27 +1,19 @@
 """Phase 5: Format data for moshi-finetune.
 
-Takes assembled stereo WAVs and produces:
-1. A manifest.jsonl with {path, duration} entries
-2. Runs Whisper annotation to generate per-file .json transcripts
-3. Injects system prompt text into the transcript alignments
-
-The key insight from PersonaPlex: system prompts are baked into the
-text token stream using <system> tags. During training, moshi-finetune
-will learn to condition on these tokens.
-
-For the pilot, we prepend the system prompt as text in the alignments
-at the beginning (during the voice prompt region). The model sees:
-  - Audio: voice_prompt + sine + silence + conversation
-  - Text: <system> prompt text <system> + conversation transcript
+Creates:
+1. manifest_train.jsonl + manifest_eval.jsonl (with configurable split)
+2. Runs Whisper annotation for word-level alignments
+3. Injects <system> tagged text into alignments during prompt region
 
 Usage:
-    python -m pipeline.format_dataset \
-        --config configs/generation.yaml \
-        --assembled_dir data/assembled
+    python -m pipeline.format_dataset --config configs/generation.yaml
+    python -m pipeline.format_dataset --config configs/generation.yaml --skip_whisper
 """
 
 import argparse
 import json
+import random
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -32,10 +24,6 @@ from pipeline.utils import ensure_dir, get_audio_duration, load_json, load_yaml,
 
 
 def wrap_with_system_tags(text: str) -> str:
-    """Wrap text with system tags (PersonaPlex convention).
-
-    The Moshi/Helium backbone learns to condition on <system> delimiters.
-    """
     cleaned = text.strip()
     if cleaned.startswith("<system>") and cleaned.endswith("<system>"):
         return cleaned
@@ -46,20 +34,11 @@ def build_alignments_with_system_prompt(
     metadata: dict,
     whisper_alignments: list | None = None,
 ) -> list:
-    """Build alignment list with system prompt injected at the start.
-
-    The system prompt text is placed in the alignment timeline
-    during the voice prompt region (before conversation starts).
-    """
     alignments = []
-
-    # Inject system prompt as aligned text during prompt region
     system_prompt = metadata.get("system_prompt", "")
     if system_prompt:
         prompt_text = wrap_with_system_tags(system_prompt)
         prompt_end = metadata.get("prompt_end_sec", 0.0)
-
-        # Place system prompt words across the prompt region
         words = prompt_text.split()
         if words and prompt_end > 0:
             duration_per_word = prompt_end / len(words)
@@ -68,92 +47,49 @@ def build_alignments_with_system_prompt(
                 end = round((i + 1) * duration_per_word, 3)
                 alignments.append([word, [start, end], "SPEAKER_MAIN"])
 
-    # Append whisper-generated alignments for the actual conversation
     if whisper_alignments:
         alignments.extend(whisper_alignments)
 
     return alignments
 
 
-def create_manifest(assembled_dir: Path, output_dir: Path) -> Path:
-    """Create manifest.jsonl from assembled WAV files."""
-    manifest_path = output_dir / "manifest.jsonl"
-
-    with open(manifest_path, "w") as f:
-        for wav_path in sorted(assembled_dir.glob("*.wav")):
-            duration = get_audio_duration(wav_path)
-            # Use relative path from output_dir
-            rel_path = str(wav_path.relative_to(output_dir)) if wav_path.is_relative_to(output_dir) else str(wav_path)
-            entry = {"path": rel_path, "duration": round(duration, 2)}
-            f.write(json.dumps(entry) + "\n")
-
-    return manifest_path
-
-
-def run_whisper_annotation(manifest_path: Path, lang: str = "en", whisper_model: str = "medium"):
-    """Run moshi-finetune's annotate.py to generate .json transcripts."""
+def run_whisper_annotation(manifest_path: Path, lang: str = "en", whisper_model: str = "medium") -> bool:
     annotate_script = Path(__file__).parent.parent / "vendor" / "moshi-finetune" / "annotate.py"
-
     if not annotate_script.exists():
-        print(f"[WARN] annotate.py not found at {annotate_script}")
-        print("  Skipping Whisper annotation. Will use metadata-based alignments only.")
+        print(f"[WARN] annotate.py not found at {annotate_script}. Skipping Whisper.")
         return False
 
-    cmd = [
-        sys.executable,
-        str(annotate_script),
-        str(manifest_path),
-        "--lang", lang,
-        "--whisper_model", whisper_model,
-        "--local",
-    ]
+    cmd = [sys.executable, str(annotate_script), str(manifest_path), "--lang", lang, "--whisper_model", whisper_model, "--local"]
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
-
     if result.returncode != 0:
-        print(f"[WARN] annotate.py failed: {result.stderr}")
+        print(f"[WARN] annotate.py failed: {result.stderr[:500]}")
         return False
-
     return True
 
 
-def format_single(
-    wav_path: Path,
-    meta_path: Path,
-    output_dir: Path,
-    use_whisper: bool = True,
-) -> dict | None:
-    """Format a single conversation for moshi-finetune."""
+def format_single(wav_path: Path, meta_path: Path, output_dir: Path) -> dict | None:
     metadata = load_json(meta_path)
-
-    # Copy WAV to output dir (or symlink)
     out_wav = output_dir / "audio" / wav_path.name
     ensure_dir(out_wav.parent)
     if not out_wav.exists():
-        import shutil
         shutil.copy2(wav_path, out_wav)
 
-    # Check if whisper annotation exists
+    # Check for whisper annotation
     whisper_json = out_wav.with_suffix(".json")
     whisper_alignments = None
     if whisper_json.exists():
         whisper_data = load_json(whisper_json)
         whisper_alignments = whisper_data.get("alignments", [])
 
-    # Build final alignments with system prompt
-    alignments = build_alignments_with_system_prompt(
-        metadata=metadata,
-        whisper_alignments=whisper_alignments,
-    )
+    alignments = build_alignments_with_system_prompt(metadata, whisper_alignments)
 
-    # Write final .json transcript
     transcript_data = {
         "alignments": alignments,
-        # Store system prompt info for potential future use with text_conditions
         "text_conditions": None,
-        # Metadata for tracking
         "_metadata": {
             "category": metadata.get("category", ""),
+            "data_type": metadata.get("data_type", "standard"),
             "system_prompt": metadata.get("system_prompt", ""),
             "prompt_end_sec": metadata.get("prompt_end_sec", 0.0),
             "assistant_voice_id": metadata.get("assistant_voice_id", ""),
@@ -170,68 +106,80 @@ def format_single(
 def main():
     parser = argparse.ArgumentParser(description="Format dataset for moshi-finetune")
     parser.add_argument("--config", type=str, default="configs/generation.yaml")
-    parser.add_argument("--assembled_dir", type=str, default="data/assembled")
-    parser.add_argument("--skip_whisper", action="store_true", help="Skip Whisper annotation")
+    parser.add_argument("--assembled_dir", type=str, default=None)
+    parser.add_argument("--skip_whisper", action="store_true")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    cfg = load_yaml(args.config)["dataset"]
-    quality_cfg = load_yaml(args.config)["quality"]
-    output_dir = ensure_dir(cfg["output_dir"])
-    assembled_dir = Path(args.assembled_dir)
+    random.seed(args.seed)
+    full_cfg = load_yaml(args.config)
+    cfg = full_cfg["dataset"]
+    quality_cfg = full_cfg["quality"]
 
-    # Step 1: Copy WAVs and create initial manifest for Whisper
-    print("=== Step 1: Preparing audio files ===")
+    assembled_dir = Path(args.assembled_dir or full_cfg["assembly"]["output_dir"])
+    output_dir = ensure_dir(cfg["output_dir"])
     audio_dir = ensure_dir(output_dir / "audio")
+
     wav_files = sorted(assembled_dir.glob("*.wav"))
     print(f"Found {len(wav_files)} WAV files")
 
-    import shutil
+    # Step 1: Copy WAVs
+    print("=== Step 1: Copying audio ===")
     for wav_path in tqdm(wav_files, desc="Copying"):
         dest = audio_dir / wav_path.name
         if not dest.exists():
             shutil.copy2(wav_path, dest)
 
-    # Step 2: Create temporary manifest for Whisper annotation
+    # Step 2: Whisper annotation
     if not args.skip_whisper:
-        print("\n=== Step 2: Running Whisper annotation ===")
-        # Create manifest pointing to audio/ subdirectory
+        print("\n=== Step 2: Whisper annotation ===")
         temp_manifest = output_dir / "_temp_manifest.jsonl"
         with open(temp_manifest, "w") as f:
             for wav_path in sorted(audio_dir.glob("*.wav")):
+                # Skip if already annotated
+                if wav_path.with_suffix(".json").exists():
+                    continue
                 duration = get_audio_duration(wav_path)
-                entry = {"path": str(wav_path), "duration": round(duration, 2)}
-                f.write(json.dumps(entry) + "\n")
+                f.write(json.dumps({"path": str(wav_path), "duration": round(duration, 2)}) + "\n")
+        if temp_manifest.stat().st_size > 0:
+            run_whisper_annotation(temp_manifest, "en", quality_cfg.get("whisper_model", "medium"))
 
-        run_whisper_annotation(
-            temp_manifest,
-            lang="en",
-            whisper_model=quality_cfg["whisper_model"],
-        )
-
-    # Step 3: Build final transcripts with system prompts and manifest
-    print("\n=== Step 3: Building final dataset ===")
-    manifest_entries = []
-
+    # Step 3: Build final dataset with train/eval split
+    print("\n=== Step 3: Building dataset ===")
+    entries = []
     for wav_path in tqdm(wav_files, desc="Formatting"):
         meta_path = assembled_dir / f"{wav_path.stem}_meta.json"
         if not meta_path.exists():
-            print(f"  [WARN] Missing metadata for {wav_path.name}")
             continue
-
-        entry = format_single(wav_path, meta_path, output_dir, use_whisper=not args.skip_whisper)
+        entry = format_single(wav_path, meta_path, output_dir)
         if entry:
-            manifest_entries.append(entry)
+            entries.append(entry)
 
-    # Write final manifest
-    manifest_path = Path(cfg["manifest_path"])
-    ensure_dir(manifest_path.parent)
-    with open(manifest_path, "w") as f:
-        for entry in manifest_entries:
+    # Split into train/eval
+    eval_ratio = cfg.get("eval_split_ratio", 0.05)
+    random.shuffle(entries)
+    n_eval = max(1, int(len(entries) * eval_ratio))
+    eval_entries = entries[:n_eval]
+    train_entries = entries[n_eval:]
+
+    # Write manifests
+    train_manifest = output_dir / "manifest_train.jsonl"
+    eval_manifest = output_dir / "manifest_eval.jsonl"
+    for path, data in [(train_manifest, train_entries), (eval_manifest, eval_entries)]:
+        with open(path, "w") as f:
+            for entry in data:
+                f.write(json.dumps(entry) + "\n")
+
+    # Also write combined manifest for compatibility
+    combined = output_dir / "manifest.jsonl"
+    with open(combined, "w") as f:
+        for entry in train_entries + eval_entries:
             f.write(json.dumps(entry) + "\n")
 
-    print(f"\nDataset ready: {len(manifest_entries)} conversations")
-    print(f"Manifest: {manifest_path}")
-    print(f"Audio dir: {audio_dir}")
+    print(f"\nDataset ready:")
+    print(f"  Train: {len(train_entries)} conversations → {train_manifest}")
+    print(f"  Eval:  {len(eval_entries)} conversations → {eval_manifest}")
+    print(f"  Audio: {audio_dir}")
 
 
 if __name__ == "__main__":

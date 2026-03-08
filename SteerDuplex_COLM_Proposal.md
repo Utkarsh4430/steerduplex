@@ -406,7 +406,7 @@ The user can switch policies: "Just listen, don't keep saying uh-huh" → model 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Qwen3-TTS can't compose multiple attributes well | Counterfactual data quality | Test early in pilot; fall back to single-attribute variation |
-| Qwen3-TTS ref_audio + instruct don't work simultaneously | Can't maintain voice while changing style | Test in week 1; fall back to two-step: clone then post-process |
+| Qwen3-TTS ref_audio + instruct are separate models | Can't use both on same utterance | Dual-model pipeline: CustomVoice (preset+instruct) for assistant, Base (ref_audio) for user |
 | Model ignores user steering instructions | Core contribution fails | Increase dynamic steering data ratio (A9); diversify steering language |
 | Voice identity drifts when style changes | Control leakage | Use speaker similarity in quality filter; consider DPO on voice stability |
 | Compositional generalization doesn't emerge | Weaker claim | Still report what DOES compose; analyze failure modes (also publishable) |

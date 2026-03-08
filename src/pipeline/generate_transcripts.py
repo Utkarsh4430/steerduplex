@@ -1,90 +1,202 @@
-"""Phase 1: Generate conversation transcripts using LLMs.
+"""Phase 1: Generate conversation transcripts using LLMs via LiteLLM.
 
-Samples characteristics from the data_categories YAML files,
-feeds them to an LLM with a structured meta-prompt, and produces
-JSON transcripts ready for TTS synthesis.
+Supports all 5 data types: standard, dynamic, counterfactual, long_form, graceful_failure.
+Supports all 10 categories: A1-A10.
+Resumable: skips already-generated conversations.
+Retries: 3 attempts per conversation, exponential backoff on rate limits.
 
 Usage:
-    python -m pipeline.generate_transcripts \
-        --config configs/generation.yaml \
-        --category A3_tone_controlled \
-        --num_conversations 70 \
-        --seed 42
+    python -m pipeline.generate_transcripts --config configs/generation.yaml
+    python -m pipeline.generate_transcripts --config configs/generation.yaml --category A9_dynamic_steering
 """
 
 import argparse
 import json
 import random
 import re
+import time
 from pathlib import Path
 
 from openai import OpenAI
 
 from pipeline.utils import ensure_dir, load_all_categories, load_yaml, save_json, set_seed
 
-# Meta-prompt template for transcript generation
-META_PROMPT = """\
-You are generating a realistic two-person conversation transcript for training a speech-to-speech AI model.
-
-## Task
-Generate a conversation between an ASSISTANT and a USER based on the following specifications.
-
-## Specifications
-- Category: {category}
-- Sampled Traits: {traits_json}
-- System Prompt for Assistant: {system_prompt}
-- TTS Style Instruction for Assistant: {system_prompt_tts_instruct}
-- Number of turns: {num_turns} (total, alternating user/assistant)
-
-## Requirements
-1. The conversation MUST start with the user speaking first.
-2. Each turn must include the spoken text and a `tts_instruct` field describing HOW it should sound.
-3. The assistant's `tts_instruct` must be consistent with: "{system_prompt_tts_instruct}"
-4. The user's `tts_instruct` should reflect realistic human speech patterns (casual, natural variation).
-5. Include natural speech elements where appropriate: (laughs), (sighs), (pauses), "um", "uh".
-6. Keep each turn 1-4 sentences. Conversations should feel natural, not scripted.
-7. The assistant MUST consistently follow the system prompt personality/style throughout.
-8. Do NOT include greetings like "How can I help you?" unless contextually natural.
-
-## Output Format
-Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
-{{
-  "category": "{category}",
-  "sampled_traits": {traits_json},
-  "system_prompt": "{system_prompt}",
-  "system_prompt_tts_instruct": "{system_prompt_tts_instruct}",
-  "turns": [
-    {{
-      "role": "user",
-      "text": "...",
-      "tts_instruct": "..."
-    }},
-    {{
-      "role": "assistant",
-      "text": "...",
-      "tts_instruct": "..."
-    }}
-  ]
-}}
-"""
-
+# ---------------------------------------------------------------------------
+# System prompt templates (role + boundaries, NEVER style/tone)
+# ---------------------------------------------------------------------------
 SYSTEM_PROMPT_TEMPLATES = {
-    "minimal": "You are an assistant. {trait_description}",
-    "detailed": "You are an AI assistant with the following characteristics: {trait_description}. "
-    "Maintain this style consistently throughout the conversation.",
-    "highly_detailed": "You are an AI voice assistant engaged in a real-time spoken conversation. "
-    "Your personality and speaking style: {trait_description}. "
-    "You must maintain this exact style in every response. "
-    "Respond naturally as if speaking aloud. Keep responses concise and conversational.",
+    "generic": (
+        "You are a helpful voice assistant. Your voice and identity are fixed. "
+        "Stay kind and constructive. Follow the user's instructions about speaking style."
+    ),
+    "customer_service": (
+        "You are a customer service agent for {domain}. Your voice and identity are fixed. "
+        "Always maintain a professional, respectful tone. Follow the user's instructions "
+        "about speaking speed, formality, and detail level."
+    ),
+    "qa": (
+        "You are a knowledgeable assistant. Your voice and identity are fixed. "
+        "Be accurate and helpful. If you don't know something, say so honestly."
+    ),
 }
 
+# ---------------------------------------------------------------------------
+# Meta-prompt for transcript generation
+# ---------------------------------------------------------------------------
+META_PROMPT_STANDARD = """\
+Generate a realistic spoken conversation between a USER and an ASSISTANT.
 
+## Context
+- Category: {category}
+- Traits: {traits_json}
+- System prompt (for the assistant's role): {system_prompt}
+- Number of turns: {num_turns} (alternating user/assistant, user speaks first)
+
+## CRITICAL Rules
+1. User speaks FIRST.
+2. The user requests the style/tone/persona at the START of the conversation (e.g., "Can you be really sarcastic?" or "Talk like a pirate").
+3. The assistant FOLLOWS the user's request and maintains it throughout.
+4. Each turn has `tts_instruct` describing HOW it should sound (for TTS synthesis).
+5. Assistant tts_instruct must match the style the user requested.
+6. User tts_instruct should be natural (casual, varied, realistic).
+7. Include natural speech: "um", "uh", "(laughs)", "(sighs)", "(pauses)".
+8. Keep turns 1-4 sentences. Natural, not scripted.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_DYNAMIC = """\
+Generate a spoken conversation where the USER changes the ASSISTANT's speaking style MID-CONVERSATION.
+
+## Context
+- Category: {category}
+- Traits: {traits_json}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns} (user speaks first)
+- Steering events: {num_steering} time(s) the user changes the assistant's style
+
+## CRITICAL Rules
+1. User speaks first with a normal request.
+2. At {num_steering} point(s) during the conversation, the user gives an explicit instruction to change how the assistant speaks (e.g., "slow down", "be more casual", "drop the formal tone").
+3. The assistant ADAPTS IMMEDIATELY in its next turn — both text content and tts_instruct must change.
+4. Changes PERSIST — the assistant keeps the new style for all subsequent turns.
+5. Mark steering turns with "is_steering": true and "steers": {{"dimension": "new_value"}}.
+6. After adaptation, mark assistant turns with "adapted_to": ["dimension:value", ...].
+7. Include tts_instruct for every turn.
+8. The assistant should acknowledge the style change briefly (not ignore it).
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}},
+    {{"role": "user", "text": "Can you slow down?", "tts_instruct": "...", "is_steering": true, "steers": {{"speed": "slow"}}}},
+    {{"role": "assistant", "text": "Sure, I'll take it slower...", "tts_instruct": "slow, deliberate, clear pauses", "adapted_to": ["speed:slow"]}}
+  ]
+}}"""
+
+META_PROMPT_COUNTERFACTUAL = """\
+Generate a SHORT spoken conversation (3-4 turns) that can be rendered in two different styles.
+
+## Context
+- Category: {category}
+- Traits: {traits_json}
+- Style A: {style_a}
+- Style B: {style_b}
+- Differing dimension: {diff_dimension}
+
+## CRITICAL Rules
+1. Generate ONE conversation with neutral text that works for BOTH styles.
+2. Provide TWO sets of tts_instruct — one for style_a, one for style_b.
+3. ONLY the {diff_dimension} should differ between variants.
+4. Keep it 3-4 turns, simple topic.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "diff_dimension": "{diff_dimension}",
+  "style_a": "{style_a}",
+  "style_b": "{style_b}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "casual, natural"}},
+    {{"role": "assistant", "text": "...", "tts_instruct_a": "...", "tts_instruct_b": "..."}}
+  ]
+}}"""
+
+META_PROMPT_LONG_FORM = """\
+Generate a LONG spoken conversation (10-15 turns) testing multi-turn coherence.
+
+## Context
+- Category: {category}
+- Traits: {traits_json}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User speaks first.
+2. Include topic changes (at least 1-2).
+3. Reference proper nouns from earlier turns (test recall).
+4. The assistant must maintain its style/role consistently over many turns.
+5. Include natural speech patterns and some backchanneling.
+6. Each turn has tts_instruct.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_GRACEFUL_FAILURE = """\
+Generate a spoken conversation where the ASSISTANT must handle a difficult situation gracefully.
+
+## Context
+- Failure type: {failure_type}
+- Scenario: {scenario}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User speaks first.
+2. At some point, the user says something the assistant can't fulfill, doesn't understand, or that's inappropriate.
+3. The assistant must handle it GRACEFULLY — not go silent, not give a robotic refusal.
+4. The assistant should: acknowledge, briefly explain the limit, offer an alternative or redirect.
+5. The conversation should feel NATURAL, not like a test.
+6. Each turn has tts_instruct.
+
+## Failure type guidance
+- clarification: user is unclear, assistant asks to repeat/clarify
+- knowledge_limit: user asks something assistant doesn't know, assistant admits it honestly
+- capability_limit: user asks assistant to do something it can't (call, email, etc.)
+- misunderstanding_repair: assistant gets it wrong, user corrects, assistant recovers
+- frustration_deescalation: user is frustrated, assistant stays calm and helpful
+- safety_boundary: user asks for something inappropriate, assistant declines kindly
+- inappropriate_steering: user asks assistant to change voice/be hostile, assistant offers alternative
+- noise_issue: audio quality problem, assistant asks to repeat
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "failure_type": "{failure_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+
+# ---------------------------------------------------------------------------
+# Trait sampling per category
+# ---------------------------------------------------------------------------
 def sample_traits(category_data: dict, category_id: str) -> dict:
     """Sample random traits from a category definition."""
     traits = {"category": category_id}
 
     if category_id.startswith("A1"):
-        # Customer service: sample domain + scenario
         domains = list(category_data.get("domains", {}).keys())
         if domains:
             domain = random.choice(domains)
@@ -94,7 +206,6 @@ def sample_traits(category_data: dict, category_id: str) -> dict:
                 traits["scenario"] = random.choice(scenarios)
 
     elif category_id.startswith("A2"):
-        # QA assistant: sample subcategory
         subcats = list(category_data.get("subcategories", {}).keys())
         if subcats:
             subcat = random.choice(subcats)
@@ -104,197 +215,284 @@ def sample_traits(category_data: dict, category_id: str) -> dict:
                 traits["topic"] = random.choice(topics)
 
     elif category_id.startswith("A3"):
-        # Tone controlled: sample tone
         all_tones = []
         for group in ["negative", "neutral", "positive"]:
             tones = category_data.get("tones", {}).get(group, {})
             for tone_name, tone_data in tones.items():
-                all_tones.append(
-                    {
-                        "name": tone_name,
-                        "group": group,
-                        **tone_data,
-                    }
-                )
+                all_tones.append({"name": tone_name, "group": group, **(tone_data if isinstance(tone_data, dict) else {})})
         if all_tones:
             tone = random.choice(all_tones)
             traits["tone"] = tone["name"]
-            traits["tone_group"] = tone["group"]
-            traits["tts_instruct"] = tone.get("tts_instruct", "")
+            traits["tts_instruct"] = tone.get("tts_instruct", f"{tone['name']} tone")
             traits["description"] = tone.get("description", "")
             topics = tone.get("suitable_topics", [])
             if topics:
                 traits["topic"] = random.choice(topics)
 
     elif category_id.startswith("A4"):
-        # Persona controlled: sample persona
         all_personas = []
         for subcat_name, subcat_data in category_data.get("subcategories", {}).items():
-            personas = subcat_data.get("personas", {})
+            personas = subcat_data.get("personas", {}) if isinstance(subcat_data, dict) else {}
             for persona_name, persona_data in personas.items():
-                all_personas.append(
-                    {
-                        "name": persona_name,
-                        "subcategory": subcat_name,
-                        **persona_data,
-                    }
-                )
+                all_personas.append({"name": persona_name, "subcategory": subcat_name, **(persona_data if isinstance(persona_data, dict) else {})})
         if all_personas:
             persona = random.choice(all_personas)
             traits["persona"] = persona["name"]
-            traits["subcategory"] = persona["subcategory"]
             traits["description"] = persona.get("description", "")
-            traits["tts_instruct"] = persona.get("tts_instruct", "")
+            traits["tts_instruct"] = persona.get("tts_instruct", f"{persona['name']} persona")
 
     elif category_id.startswith("A5"):
-        # Style & accent
-        styles = list(category_data.get("styles", {}).keys())
-        accents = list(category_data.get("accents", {}).keys())
+        styles = category_data.get("speaking_styles", category_data.get("styles", {}))
+        accents = category_data.get("accents", {})
         if styles:
-            style = random.choice(styles)
+            style = random.choice(list(styles.keys()))
+            style_data = styles[style] if isinstance(styles[style], dict) else {}
             traits["style"] = style
-            traits["style_data"] = category_data["styles"][style]
-        if accents:
-            accent = random.choice(accents)
+            traits["tts_instruct"] = style_data.get("tts_instruct", f"{style} style")
+        if accents and random.random() < 0.5:
+            accent = random.choice(list(accents.keys()))
             traits["accent"] = accent
-            traits["accent_data"] = category_data["accents"][accent]
 
     elif category_id.startswith("A6"):
-        # Speed & length
-        speeds = list(category_data.get("speeds", {}).keys())
-        lengths = list(category_data.get("lengths", {}).keys())
+        speeds = category_data.get("speed_controls", category_data.get("speeds", {}))
+        lengths = category_data.get("length_controls", category_data.get("lengths", {}))
         if speeds:
-            traits["speed"] = random.choice(speeds)
+            speed = random.choice(list(speeds.keys()))
+            traits["speed"] = speed
         if lengths:
-            traits["length"] = random.choice(lengths)
+            length = random.choice(list(lengths.keys()))
+            traits["length"] = length
 
     elif category_id.startswith("A7"):
-        # Emotional/empathetic
-        emotions = list(category_data.get("user_emotions", {}).keys())
+        emotions = category_data.get("user_emotions", category_data.get("emotions", {}))
         if emotions:
-            emotion = random.choice(emotions)
+            emotion = random.choice(list(emotions.keys()))
             traits["user_emotion"] = emotion
-            traits["emotion_data"] = category_data["user_emotions"][emotion]
+            emo_data = emotions[emotion] if isinstance(emotions[emotion], dict) else {}
+            traits["adaptation"] = emo_data.get("assistant_adaptation", "respond appropriately")
 
     elif category_id.startswith("A8"):
-        # Failure cases
-        cases = list(category_data.get("cases", {}).keys())
+        cases = category_data.get("cases", category_data.get("categories", {}))
         if cases:
-            case = random.choice(cases)
+            case = random.choice(list(cases.keys()))
             traits["case"] = case
-            traits["case_data"] = category_data["cases"][case]
+
+    elif category_id.startswith("A9"):
+        dims = list(category_data.get("steering_dimensions", {}).keys())
+        if dims:
+            traits["steering_dimension"] = random.choice(dims)
+        patterns = list(category_data.get("steering_patterns", {}).keys())
+        if patterns:
+            traits["steering_pattern"] = random.choice(patterns)
+
+    elif category_id.startswith("A10"):
+        cats = list(category_data.get("categories", {}).keys())
+        if cats:
+            failure_type = random.choice(cats)
+            traits["failure_type"] = failure_type
+            cat_data = category_data["categories"][failure_type]
+            if isinstance(cat_data, dict):
+                scenarios = cat_data.get("scenarios", [])
+                if scenarios:
+                    traits["scenario"] = random.choice(scenarios) if isinstance(scenarios[0], str) else random.choice(list(scenarios.keys()))
 
     return traits
 
 
-def build_system_prompt(traits: dict, granularity: str) -> tuple[str, str]:
-    """Build system prompt and TTS instruct from sampled traits."""
-    # Build trait description
-    parts = []
-    if "tone" in traits:
-        parts.append(f"Speak with a {traits['tone']} tone. {traits.get('description', '')}")
-    if "persona" in traits:
-        parts.append(f"You are {traits['persona']}. {traits.get('description', '')}")
-    if "style" in traits:
-        style_data = traits.get("style_data", {})
-        parts.append(f"Speak in a {traits['style']} style. {style_data.get('description', '')}")
-    if "accent" in traits:
-        accent_data = traits.get("accent_data", {})
-        parts.append(f"Speak with a {traits['accent']} accent. {accent_data.get('description', '')}")
-    if "speed" in traits:
-        parts.append(f"Speak at a {traits['speed']} pace.")
-    if "length" in traits:
-        parts.append(f"Keep responses {traits['length']}.")
-    if "domain" in traits:
-        parts.append(f"You are a {traits['domain']} customer service agent.")
-    if "scenario" in traits:
-        parts.append(f"Handle this scenario: {traits['scenario']}.")
-    if "user_emotion" in traits:
-        emotion_data = traits.get("emotion_data", {})
-        parts.append(
-            f"The user is feeling {traits['user_emotion']}. "
-            f"{emotion_data.get('assistant_response', 'Respond appropriately.')}"
+def build_system_prompt(traits: dict) -> str:
+    """Build minimal system prompt from traits (role + boundaries only)."""
+    cat = traits.get("category", "")
+    if cat.startswith("A1") and "domain" in traits:
+        return SYSTEM_PROMPT_TEMPLATES["customer_service"].format(domain=traits["domain"])
+    elif cat.startswith("A2"):
+        return SYSTEM_PROMPT_TEMPLATES["qa"]
+    else:
+        return SYSTEM_PROMPT_TEMPLATES["generic"]
+
+
+def sample_data_type(weights: dict, category_id: str) -> str:
+    """Sample a data type, respecting category constraints."""
+    # A9 should mostly be dynamic, A10 should mostly be graceful_failure
+    if category_id.startswith("A9"):
+        return random.choices(
+            ["dynamic", "standard"], weights=[0.85, 0.15], k=1
+        )[0]
+    if category_id.startswith("A10"):
+        return random.choices(
+            ["graceful_failure", "standard"], weights=[0.85, 0.15], k=1
+        )[0]
+
+    types = list(weights.keys())
+    probs = [weights[t] for t in types]
+    return random.choices(types, weights=probs, k=1)[0]
+
+
+# ---------------------------------------------------------------------------
+# Build the LLM prompt based on data type
+# ---------------------------------------------------------------------------
+COUNTERFACTUAL_DIMENSIONS = {
+    "tone": [("cheerful", "serious"), ("sarcastic", "sincere"), ("formal", "casual"), ("empathetic", "matter-of-fact")],
+    "speed": [("fast", "slow"), ("very_fast", "moderate")],
+    "energy": [("high_energy", "calm"), ("excited", "subdued")],
+}
+
+
+def build_llm_prompt(traits: dict, data_type: str, system_prompt: str, turns_range: tuple[int, int]) -> str:
+    """Build the appropriate meta-prompt based on data type."""
+    clean_traits = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
+    traits_json = json.dumps(clean_traits, indent=2)
+    category = traits.get("category", "unknown")
+
+    if data_type == "standard":
+        num_turns = random.randint(turns_range[0], turns_range[1])
+        return META_PROMPT_STANDARD.format(
+            category=category, traits_json=traits_json,
+            system_prompt=system_prompt, num_turns=num_turns,
         )
-    if "case" in traits:
-        case_data = traits.get("case_data", {})
-        parts.append(f"Edge case: {traits['case']}. {case_data.get('description', '')}")
 
-    trait_description = " ".join(parts) if parts else "Be helpful and conversational."
+    elif data_type == "dynamic":
+        num_turns = random.randint(max(6, turns_range[0]), min(14, turns_range[1] + 4))
+        num_steering = random.randint(1, 3)
+        return META_PROMPT_DYNAMIC.format(
+            category=category, traits_json=traits_json,
+            system_prompt=system_prompt, num_turns=num_turns,
+            num_steering=num_steering,
+        )
 
-    template = SYSTEM_PROMPT_TEMPLATES.get(granularity, SYSTEM_PROMPT_TEMPLATES["detailed"])
-    system_prompt = template.format(trait_description=trait_description)
+    elif data_type == "counterfactual":
+        dim = random.choice(list(COUNTERFACTUAL_DIMENSIONS.keys()))
+        pair = random.choice(COUNTERFACTUAL_DIMENSIONS[dim])
+        return META_PROMPT_COUNTERFACTUAL.format(
+            category=category, traits_json=traits_json,
+            style_a=pair[0], style_b=pair[1], diff_dimension=dim,
+        )
 
-    # TTS instruct
-    tts_instruct = traits.get("tts_instruct", "natural, conversational, clear enunciation")
+    elif data_type == "long_form":
+        num_turns = random.randint(10, 15)
+        return META_PROMPT_LONG_FORM.format(
+            category=category, traits_json=traits_json,
+            system_prompt=system_prompt, num_turns=num_turns,
+        )
 
-    return system_prompt, tts_instruct
+    elif data_type == "graceful_failure":
+        failure_type = traits.get("failure_type", "clarification_requests")
+        scenario = traits.get("scenario", "user says something unclear")
+        num_turns = random.randint(4, 8)
+        return META_PROMPT_GRACEFUL_FAILURE.format(
+            failure_type=failure_type, scenario=scenario,
+            system_prompt=system_prompt, num_turns=num_turns,
+        )
+
+    return META_PROMPT_STANDARD.format(
+        category=category, traits_json=traits_json,
+        system_prompt=system_prompt, num_turns=random.randint(*turns_range),
+    )
 
 
-def generate_single_transcript(
+# ---------------------------------------------------------------------------
+# LLM call with retry + backoff
+# ---------------------------------------------------------------------------
+def call_llm(
+    client: OpenAI,
+    model: str,
+    prompt: str,
+    temperature: float,
+    max_tokens: int,
+    max_retries: int = 3,
+    retry_wait_sec: float = 5.0,
+) -> str | None:
+    """Call the LLM with retry logic. Returns raw text or None."""
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content.strip()
+
+        except Exception as e:
+            err_str = str(e).lower()
+            if "rate" in err_str or "429" in err_str or "quota" in err_str:
+                wait = retry_wait_sec * (2 ** attempt)
+                print(f"  [RATE LIMIT] Waiting {wait:.0f}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(wait)
+            elif attempt < max_retries - 1:
+                print(f"  [RETRY {attempt + 1}] {e}")
+                time.sleep(2)
+            else:
+                print(f"  [FAIL] {e}")
+                return None
+    return None
+
+
+def parse_llm_response(content: str) -> dict | None:
+    """Parse JSON from LLM response, handling markdown code blocks."""
+    if not content:
+        return None
+    # Strip markdown
+    if content.startswith("```"):
+        content = re.sub(r"^```(?:json)?\s*\n?", "", content)
+        content = re.sub(r"\n?\s*```\s*$", "", content)
+    # Strip any text before first { or after last }
+    first_brace = content.find("{")
+    last_brace = content.rfind("}")
+    if first_brace >= 0 and last_brace > first_brace:
+        content = content[first_brace:last_brace + 1]
+    try:
+        data = json.loads(content)
+        if "turns" not in data:
+            return None
+        if len(data["turns"]) < 2:
+            return None
+        for turn in data["turns"]:
+            if "role" not in turn or "text" not in turn:
+                return None
+        return data
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def generate_single(
     client: OpenAI,
     model: str,
     category_id: str,
     category_data: dict,
+    data_type: str,
     temperature: float,
     max_tokens: int,
     turns_range: tuple[int, int],
-    granularity: str,
+    max_retries: int,
+    retry_wait_sec: float,
 ) -> dict | None:
-    """Generate a single conversation transcript via LLM."""
+    """Generate a single conversation transcript."""
     traits = sample_traits(category_data, category_id)
-    system_prompt, tts_instruct = build_system_prompt(traits, granularity)
-    num_turns = random.randint(turns_range[0], turns_range[1])
+    system_prompt = build_system_prompt(traits)
+    prompt = build_llm_prompt(traits, data_type, system_prompt, turns_range)
 
-    # Clean traits for JSON serialization (remove nested dicts with non-serializable data)
-    clean_traits = {}
-    for k, v in traits.items():
-        if isinstance(v, (str, int, float, bool, list)):
-            clean_traits[k] = v
+    content = call_llm(client, model, prompt, temperature, max_tokens, max_retries, retry_wait_sec)
+    transcript = parse_llm_response(content)
 
-    prompt = META_PROMPT.format(
-        category=category_id,
-        traits_json=json.dumps(clean_traits, indent=2),
-        system_prompt=system_prompt,
-        system_prompt_tts_instruct=tts_instruct,
-        num_turns=num_turns,
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        content = response.choices[0].message.content.strip()
-
-        # Extract JSON from response (handle markdown code blocks)
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content)
-
-        transcript = json.loads(content)
-
-        # Validate structure
-        if "turns" not in transcript or len(transcript["turns"]) < 2:
-            print(f"  [WARN] Invalid transcript: missing/short turns")
-            return None
-        for turn in transcript["turns"]:
-            if "role" not in turn or "text" not in turn:
-                print(f"  [WARN] Invalid turn: missing role/text")
-                return None
-
-        return transcript
-
-    except (json.JSONDecodeError, Exception) as e:
-        print(f"  [ERROR] Failed to generate transcript: {e}")
+    if transcript is None:
         return None
+
+    # Enrich with metadata
+    transcript["category"] = category_id
+    transcript["data_type"] = data_type
+    transcript["system_prompt"] = f"<system> {system_prompt} <system>"
+    transcript["sampled_traits"] = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
+
+    return transcript
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate conversation transcripts")
     parser.add_argument("--config", type=str, default="configs/generation.yaml")
-    parser.add_argument("--category", type=str, default=None, help="Specific category (e.g. A3_tone_controlled)")
+    parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--num_conversations", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -302,49 +500,70 @@ def main():
     cfg = load_yaml(args.config)["transcript"]
     set_seed(args.seed)
 
-    client = OpenAI(base_url=cfg["llm_base_url"], api_key="unused")
+    # LiteLLM-compatible: use the model string directly with OpenAI client
+    # The model string can include provider prefix (e.g., "openai/Qwen/Qwen3-32B")
+    model = cfg["llm_model"]
+    # Strip provider prefix for the OpenAI client if base_url is set
+    if "/" in model and cfg.get("llm_base_url"):
+        model = model.split("/", 1)[-1]  # "openai/Qwen/Qwen3-32B" -> "Qwen/Qwen3-32B"
+
+    client = OpenAI(base_url=cfg["llm_base_url"], api_key=cfg.get("llm_api_key", "unused"))
     categories = load_all_categories(cfg["categories_dir"])
     output_dir = ensure_dir(cfg["output_dir"])
 
-    # Filter to specific category if requested
     if args.category:
         categories = {k: v for k, v in categories.items() if k == args.category}
 
-    num_per_cat = args.num_conversations or cfg["pilot_per_category"]
-    granularities = cfg["system_prompt_granularities"]
+    pilot_counts = cfg.get("pilot_per_category", {})
+    dt_weights = cfg.get("data_type_weights", {"standard": 1.0})
+    max_retries = cfg.get("max_retries", 3)
+    retry_wait = cfg.get("retry_wait_sec", 5)
 
-    for cat_id, cat_data in categories.items():
+    for cat_id, cat_data in sorted(categories.items()):
+        if isinstance(pilot_counts, dict):
+            num_target = args.num_conversations or pilot_counts.get(cat_id, 60)
+        else:
+            num_target = args.num_conversations or pilot_counts
+
         cat_dir = ensure_dir(output_dir / cat_id)
-        print(f"\n=== Generating {num_per_cat} transcripts for {cat_id} ===")
 
-        generated = 0
+        # Resume: find already generated
+        existing = set()
+        for p in cat_dir.glob("*.json"):
+            existing.add(p.stem)
+        start_idx = len(existing)
+
+        if start_idx >= num_target:
+            print(f"[SKIP] {cat_id}: already have {start_idx}/{num_target}")
+            continue
+
+        print(f"\n=== {cat_id}: generating {num_target - start_idx} more (have {start_idx}/{num_target}) ===")
+
+        generated = start_idx
         attempts = 0
-        max_attempts = num_per_cat * 3
+        max_attempts = (num_target - start_idx) * 3
 
-        while generated < num_per_cat and attempts < max_attempts:
+        while generated < num_target and attempts < max_attempts:
             attempts += 1
-            granularity = random.choice(granularities)
+            data_type = sample_data_type(dt_weights, cat_id)
 
-            transcript = generate_single_transcript(
-                client=client,
-                model=cfg["llm_model"],
-                category_id=cat_id,
-                category_data=cat_data,
-                temperature=cfg["temperature"],
-                max_tokens=cfg["max_tokens"],
+            transcript = generate_single(
+                client=client, model=model,
+                category_id=cat_id, category_data=cat_data,
+                data_type=data_type,
+                temperature=cfg["temperature"], max_tokens=cfg["max_tokens"],
                 turns_range=tuple(cfg["turns_range"]),
-                granularity=granularity,
+                max_retries=max_retries, retry_wait_sec=retry_wait,
             )
 
             if transcript is not None:
                 transcript["id"] = f"{cat_id}_{generated:05d}"
-                transcript["granularity"] = granularity
                 save_json(transcript, cat_dir / f"{generated:05d}.json")
                 generated += 1
                 if generated % 10 == 0:
-                    print(f"  {generated}/{num_per_cat} done")
+                    print(f"  {generated}/{num_target} done")
 
-        print(f"  Completed: {generated}/{num_per_cat} (attempts: {attempts})")
+        print(f"  Completed: {generated}/{num_target} (attempts: {attempts})")
 
 
 if __name__ == "__main__":

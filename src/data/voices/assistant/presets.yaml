@@ -1,0 +1,28 @@
+# Assistant voice presets (Qwen3-TTS CustomVoice speakers)
+# These are the built-in speakers available in the CustomVoice model.
+# We use 2 male + 2 female for training diversity.
+# At deployment: ship male_A + female_A.
+
+voices:
+  - id: male_A
+    speaker: Ryan
+    gender: male
+    description: "Clear, neutral, versatile male voice"
+
+  - id: male_B
+    speaker: Dylan
+    gender: male
+    description: "Warmer, deeper male voice"
+
+  - id: female_A
+    speaker: Vivian
+    gender: female
+    description: "Clear, neutral, versatile female voice"
+
+  - id: female_B
+    speaker: Serena
+    gender: female
+    description: "Warmer female voice"
+
+# Other available CustomVoice speakers (can be used for user if needed):
+# Eric, Aiden, Uncle_Fu, Ono_Anna, Sohee

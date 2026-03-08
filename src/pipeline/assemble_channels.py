@@ -1,18 +1,13 @@
 """Phase 4: Assemble 2-channel (stereo) audio for moshi-finetune.
 
-Combines per-turn audio into stereo WAV:
-  - Left channel (ch0): Assistant/Moshi audio
-  - Right channel (ch1): User audio
+Left channel (ch0): Assistant/Moshi audio
+Right channel (ch1): User audio
 
-Includes system prompt prepending:
-  - Voice prompt (3-10s) prepended to assistant channel
-  - 440Hz sine marker (200ms) after voice prompt
-  - Silence on user channel during prompt region
+Includes system prompt prepending on assistant channel.
+Resumable: skips already-assembled conversations.
 
 Usage:
-    python -m pipeline.assemble_channels \
-        --config configs/generation.yaml \
-        --synth_dir data/tts_audio
+    python -m pipeline.assemble_channels --config configs/generation.yaml
 """
 
 import argparse
@@ -27,22 +22,17 @@ from pipeline.utils import ensure_dir, load_json, load_yaml, save_json, set_seed
 
 
 def generate_sine(freq_hz: float, duration_sec: float, sample_rate: int) -> np.ndarray:
-    """Generate a sine wave."""
     t = np.arange(int(duration_sec * sample_rate)) / sample_rate
     return (0.5 * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
 
 
 def load_and_resample(audio_path: str, target_sr: int) -> np.ndarray:
-    """Load audio and resample to target rate."""
     audio, sr = sf.read(audio_path, dtype="float32")
     if audio.ndim > 1:
-        audio = audio[:, 0]  # take first channel if stereo
-
+        audio = audio[:, 0]
     if sr != target_sr:
         import librosa
-
         audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
-
     return audio.astype(np.float32)
 
 
@@ -53,34 +43,22 @@ def build_system_prompt_audio(
     sine_duration: float,
     sample_rate: int,
 ) -> np.ndarray:
-    """Build the system prompt audio segment for the assistant channel.
-
-    Structure: [voice_prompt][sine_marker][silence_500ms]
-
-    This is prepended to the assistant channel before the conversation.
-    The user channel gets silence for the same duration.
-    """
+    """Build [voice_ref][sine_marker][silence] for assistant channel."""
     segments = []
+    target_samples = int(voice_prompt_duration * sample_rate)
 
-    # Voice prompt (clipped/padded to target duration)
     if voice_ref_path and Path(voice_ref_path).exists():
         ref_audio = load_and_resample(voice_ref_path, sample_rate)
-        target_samples = int(voice_prompt_duration * sample_rate)
         if len(ref_audio) > target_samples:
             ref_audio = ref_audio[:target_samples]
         elif len(ref_audio) < target_samples:
             ref_audio = np.pad(ref_audio, (0, target_samples - len(ref_audio)))
         segments.append(ref_audio)
     else:
-        # No voice ref: use silence
-        segments.append(np.zeros(int(voice_prompt_duration * sample_rate), dtype=np.float32))
+        segments.append(np.zeros(target_samples, dtype=np.float32))
 
-    # Sine marker
     segments.append(generate_sine(sine_freq, sine_duration, sample_rate))
-
-    # Brief silence after marker
     segments.append(np.zeros(int(0.5 * sample_rate), dtype=np.float32))
-
     return np.concatenate(segments)
 
 
@@ -95,37 +73,34 @@ def assemble_conversation(
     sine_freq: float,
     sine_duration_ms: float,
 ) -> tuple[np.ndarray, dict] | None:
-    """Assemble a conversation into stereo audio.
-
-    Returns:
-        (stereo_audio, metadata) or None on failure
-    """
+    """Assemble stereo WAV from per-turn audio files."""
     turns = transcript["turns"]
-    assistant_ref = transcript.get("assistant_voice", {}).get("ref_path")
 
-    # Build system prompt audio (assistant channel only)
+    # For CustomVoice assistant, we don't have a ref_path file.
+    # Generate a voice prompt segment from the first assistant turn if available.
+    assistant_voice = transcript.get("assistant_voice", {})
+    voice_ref = None
+    if assistant_voice.get("model") == "Base":
+        voice_ref = assistant_voice.get("ref_path")
+    # For CustomVoice: no ref file, use silence for voice prompt region
+    # The system prompt text still gets injected in format_dataset
+
     prompt_audio = build_system_prompt_audio(
-        voice_ref_path=assistant_ref,
+        voice_ref_path=voice_ref,
         voice_prompt_duration=voice_prompt_duration,
         sine_freq=sine_freq,
         sine_duration=sine_duration_ms / 1000.0,
         sample_rate=sample_rate,
     )
     prompt_len = len(prompt_audio)
-
-    # Estimate total duration to pre-allocate
     max_samples = int(max_duration_sec * sample_rate)
 
-    # Build timeline
     assistant_track = np.zeros(max_samples, dtype=np.float32)
     user_track = np.zeros(max_samples, dtype=np.float32)
-
-    # Place system prompt
     assistant_track[:prompt_len] = prompt_audio
 
-    cursor = prompt_len  # current position in samples
+    cursor = prompt_len
     turn_timestamps = []
-    prompt_end_sec = prompt_len / sample_rate
 
     for i, turn in enumerate(turns):
         audio_path = turn.get("audio_path")
@@ -135,82 +110,66 @@ def assemble_conversation(
 
         audio = load_and_resample(audio_path, sample_rate)
 
-        # Add inter-turn gap (or overlap for barge-in)
         if i > 0:
             if random.random() < barge_in_prob:
-                # Barge-in: overlap with previous turn
                 overlap_ms = random.randint(barge_in_overlap_ms[0], barge_in_overlap_ms[1])
                 cursor -= int(overlap_ms / 1000.0 * sample_rate)
-                cursor = max(cursor, prompt_len)  # don't overlap into prompt
+                cursor = max(cursor, prompt_len)
             else:
-                # Normal gap
                 gap_ms = random.randint(silence_range_ms[0], silence_range_ms[1])
                 cursor += int(gap_ms / 1000.0 * sample_rate)
 
-        # Check if we'd exceed max duration
         if cursor + len(audio) > max_samples:
-            # Truncate here
             remaining = max_samples - cursor
-            if remaining > sample_rate:  # at least 1 second
+            if remaining > sample_rate:
                 audio = audio[:remaining]
             else:
                 break
 
-        # Place audio on correct channel
         end = cursor + len(audio)
-        turn_start_sec = cursor / sample_rate
-        turn_end_sec = end / sample_rate
-
         if turn["role"] == "assistant":
             assistant_track[cursor:end] += audio
         else:
             user_track[cursor:end] += audio
 
-        turn_timestamps.append(
-            {
-                "role": turn["role"],
-                "start_sec": round(turn_start_sec, 3),
-                "end_sec": round(turn_end_sec, 3),
-                "text": turn["text"],
-            }
-        )
-
+        turn_timestamps.append({
+            "role": turn["role"],
+            "start_sec": round(cursor / sample_rate, 3),
+            "end_sec": round(end / sample_rate, 3),
+            "text": turn["text"],
+        })
         cursor = end
 
-    # Trim to actual length
     actual_len = min(cursor, max_samples)
     assistant_track = assistant_track[:actual_len]
     user_track = user_track[:actual_len]
 
-    # Normalize channels
     for track in [assistant_track, user_track]:
         peak = np.abs(track).max()
         if peak > 0:
             track *= 0.95 / peak
 
-    # Stereo: left=assistant, right=user
     stereo = np.stack([assistant_track, user_track], axis=-1)
 
     metadata = {
         "id": transcript["id"],
+        "category": transcript.get("category", ""),
+        "data_type": transcript.get("data_type", "standard"),
         "duration_sec": round(actual_len / sample_rate, 3),
-        "prompt_end_sec": round(prompt_end_sec, 3),
+        "prompt_end_sec": round(prompt_len / sample_rate, 3),
         "num_turns": len(turn_timestamps),
         "turn_timestamps": turn_timestamps,
         "system_prompt": transcript.get("system_prompt", ""),
-        "system_prompt_tts_instruct": transcript.get("system_prompt_tts_instruct", ""),
-        "category": transcript.get("category", ""),
         "assistant_voice_id": transcript.get("assistant_voice", {}).get("id", ""),
         "user_voice_id": transcript.get("user_voice", {}).get("id", ""),
     }
-
     return stereo, metadata
 
 
 def main():
     parser = argparse.ArgumentParser(description="Assemble 2-channel audio")
     parser.add_argument("--config", type=str, default="configs/generation.yaml")
-    parser.add_argument("--synth_dir", type=str, default="data/tts_audio")
+    parser.add_argument("--synth_dir", type=str, default=None)
     parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -218,8 +177,8 @@ def main():
     cfg = load_yaml(args.config)["assembly"]
     set_seed(args.seed)
 
+    synth_dir = Path(args.synth_dir or load_yaml(args.config)["tts"]["output_dir"])
     output_dir = ensure_dir(cfg["output_dir"])
-    synth_dir = Path(args.synth_dir)
     total = 0
     failed = 0
 
@@ -230,12 +189,18 @@ def main():
             continue
 
         synth_files = sorted(cat_dir.glob("*_synth.json"))
-        print(f"\n=== Assembling {len(synth_files)} conversations for {cat_dir.name} ===")
+        # Resume: skip already assembled
+        existing = {p.stem.replace("_meta", "") for p in output_dir.glob("*_meta.json")}
+        remaining = [f for f in synth_files if load_json(f).get("id", "") not in existing]
 
-        for synth_path in tqdm(synth_files, desc=cat_dir.name):
+        if not remaining:
+            print(f"[SKIP] {cat_dir.name}: all done")
+            continue
+
+        print(f"\n=== {cat_dir.name}: {len(remaining)} remaining ===")
+
+        for synth_path in tqdm(remaining, desc=cat_dir.name):
             transcript = load_json(synth_path)
-
-            # Skip if quality check failed
             if not transcript.get("quality_passed", True):
                 failed += 1
                 continue
@@ -258,12 +223,7 @@ def main():
 
             stereo, metadata = result
             conv_id = transcript["id"]
-
-            # Save stereo WAV
-            wav_path = output_dir / f"{conv_id}.wav"
-            sf.write(str(wav_path), stereo, cfg["sample_rate"])
-
-            # Save metadata
+            sf.write(str(output_dir / f"{conv_id}.wav"), stereo, cfg["sample_rate"])
             save_json(metadata, output_dir / f"{conv_id}_meta.json")
             total += 1
 

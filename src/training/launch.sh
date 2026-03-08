@@ -1,34 +1,33 @@
 #!/bin/bash
-# Launch SteerDuplex training using moshi-finetune
+# Launch SteerDuplex training via moshi-finetune
+# Usage:
+#   bash training/launch.sh                                    # 8 GPUs, pilot config
+#   bash training/launch.sh configs/pilot_training.yaml 4      # 4 GPUs
+#   bash training/launch.sh configs/full_training.yaml 8       # full training
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$(dirname "${SCRIPT_DIR}")"
 MOSHI_FT_DIR="${SRC_DIR}/vendor/moshi-finetune"
 
-# Default config
 CONFIG="${1:-${SRC_DIR}/configs/pilot_training.yaml}"
-NUM_GPUS="${2:-1}"
+NUM_GPUS="${2:-8}"
 
 echo "=== SteerDuplex Training ==="
-echo "Config: ${CONFIG}"
-echo "GPUs: ${NUM_GPUS}"
-echo "moshi-finetune: ${MOSHI_FT_DIR}"
+echo "Config:    ${CONFIG}"
+echo "GPUs:      ${NUM_GPUS}"
+echo "moshi-ft:  ${MOSHI_FT_DIR}"
 echo ""
 
-# Ensure we're in the moshi-finetune directory so relative imports work
-cd "${MOSHI_FT_DIR}"
-
-# Apply any patches if present
-if [ -d "${SCRIPT_DIR}/patches" ] && [ "$(ls -A ${SCRIPT_DIR}/patches/*.py 2>/dev/null)" ]; then
-    echo "Applying training patches..."
-    for patch in "${SCRIPT_DIR}/patches/"*.py; do
-        echo "  - $(basename ${patch})"
-    done
-    echo ""
+# Validate
+if [ ! -f "${CONFIG}" ]; then
+    echo "ERROR: Config not found: ${CONFIG}"
+    exit 1
 fi
 
-# Launch training
+cd "${MOSHI_FT_DIR}"
+
+# Launch with torchrun
 if [ "${NUM_GPUS}" -gt 1 ]; then
     echo "Launching distributed training on ${NUM_GPUS} GPUs..."
     torchrun \

@@ -1,44 +1,62 @@
 # SteerDuplex data generation config
 
-# Phase 1: Transcript generation
+# Phase 1: Transcript generation via LiteLLM
 transcript:
-  llm_model: "Qwen/Qwen3-32B"  # vLLM-served model
-  llm_base_url: "http://localhost:8000/v1"  # vLLM endpoint
+  llm_model: "openai/Qwen/Qwen3-32B"  # litellm model string (prefix with provider)
+  llm_base_url: "http://localhost:8000/v1"  # vLLM or any OpenAI-compatible endpoint
+  llm_api_key: "unused"  # set if your endpoint needs auth
   temperature: 0.9
   max_tokens: 4096
-  turns_range: [4, 12]  # min/max turns per conversation
+  turns_range: [4, 12]
   categories_dir: "../data_categories"
   output_dir: "data/transcripts"
-  pilot_per_category: 70  # conversations per category for pilot
-  system_prompt_granularities: ["minimal", "detailed", "highly_detailed"]
+  pilot_per_category:
+    A1_customer_service: 60
+    A2_qa_assistant: 60
+    A3_tone_controlled: 60
+    A4_persona_controlled: 60
+    A5_style_accent: 40
+    A6_speed_length: 40
+    A7_emotional_empathetic: 40
+    A8_failure_cases: 20
+    A9_dynamic_steering: 200
+    A10_graceful_failure: 40
+  # Data type distribution (applied across categories)
+  data_type_weights:
+    standard: 0.50
+    dynamic: 0.25
+    counterfactual: 0.10
+    long_form: 0.10
+    graceful_failure: 0.05
+  max_retries: 3  # per-conversation LLM call retries
+  retry_wait_sec: 5  # base wait on rate limit (exponential backoff)
 
 # Phase 2: Voice assignment
 voices:
-  assistant_voices_dir: "data/voices/assistant"  # 3-4 curated refs
-  user_voices_dir: "data/voices/user"  # large pool
-  num_assistant_voices: 4
-  ref_duration_range: [3.0, 10.0]  # seconds for voice ref clips
+  assistant_presets: "data/voices/assistant/presets.yaml"
+  user_pool: "data/voices/user/pool.jsonl"
   output_dir: "data/voice_assignments"
 
-# Phase 3: TTS synthesis
+# Phase 3: TTS synthesis (Qwen3-TTS)
 tts:
-  model_id: "Qwen/Qwen3-TTS"
-  device: "cuda"
-  sample_rate: 24000
+  # Assistant turns: CustomVoice model (preset speakers + instruct)
+  assistant_model_id: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+  # User turns: Base model (voice cloning, no instruct)
+  user_model_id: "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+  device: "cuda:0"
   output_dir: "data/tts_audio"
-  batch_size: 1  # Qwen3-TTS processes one at a time
   max_retries: 3
+  sample_rate: 24000  # target output rate
 
 # Phase 4: Channel assembly
 assembly:
-  sample_rate: 24000  # match TTS output
-  silence_range_ms: [200, 800]  # inter-turn silence
-  barge_in_prob: 0.05  # probability of overlapping turns
+  sample_rate: 24000
+  silence_range_ms: [200, 800]
+  barge_in_prob: 0.05
   barge_in_overlap_ms: [100, 500]
-  max_duration_sec: 100  # moshi-finetune limit
+  max_duration_sec: 100
   output_dir: "data/assembled"
-  # System prompt prepending
-  voice_prompt_duration_sec: 5.0  # voice ref prepended to assistant channel
+  voice_prompt_duration_sec: 5.0
   sine_marker_freq_hz: 440
   sine_marker_duration_ms: 200
 
@@ -46,10 +64,11 @@ assembly:
 dataset:
   output_dir: "data/formatted"
   manifest_path: "data/formatted/manifest.jsonl"
+  eval_split_ratio: 0.05  # 5% held out for eval
 
-# Quality filtering
+# Quality filtering (lightweight for scale)
 quality:
-  utmos_threshold: 3.5
-  wer_threshold: 0.15  # max word error rate
-  speaker_sim_threshold: 0.75  # min cosine similarity
+  wer_threshold: 0.20  # max word error rate
+  min_duration_sec: 0.5  # minimum turn duration
+  max_silence_ratio: 0.5  # max silence in a turn
   whisper_model: "medium"

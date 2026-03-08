@@ -1,13 +1,13 @@
 """Phase 3: Synthesize speech using Qwen3-TTS.
 
-Generates per-turn audio files from transcripts with voice cloning
-and style control via the `instruct` parameter.
+Assistant turns: CustomVoice model (preset speaker + instruct for style control).
+User turns: Base model (voice cloning via ref_audio, no style control).
+
+Resumable: skips already-synthesized turns.
 
 Usage:
-    python -m pipeline.synthesize_tts \
-        --config configs/generation.yaml \
-        --assignments_dir data/voice_assignments \
-        --category A3_tone_controlled
+    python -m pipeline.synthesize_tts --config configs/generation.yaml
+    python -m pipeline.synthesize_tts --config configs/generation.yaml --category A3_tone_controlled
 """
 
 import argparse
@@ -22,169 +22,193 @@ from pipeline.utils import ensure_dir, load_json, load_yaml, save_json, set_seed
 
 
 class TTSSynthesizer:
-    """Wrapper around Qwen3-TTS for voice cloning + style control."""
+    """Dual-model Qwen3-TTS wrapper.
 
-    def __init__(self, model_id: str, device: str = "cuda"):
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+    Loads two models:
+    - CustomVoice: for assistant turns (preset speaker + instruct)
+    - Base: for user turns (voice cloning from ref_audio)
+    """
 
-        print(f"Loading Qwen3-TTS from {model_id}...")
-        self.device = device
+    def __init__(
+        self,
+        assistant_model_id: str,
+        user_model_id: str,
+        device: str = "cuda:0",
+    ):
+        from qwen_tts import Qwen3TTSModel
 
-        # Qwen3-TTS uses a custom pipeline - adjust based on actual API
-        # This is the expected interface based on Qwen3-TTS docs
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=torch.bfloat16,
+        print(f"Loading CustomVoice model: {assistant_model_id}")
+        self.cv_model = Qwen3TTSModel.from_pretrained(
+            assistant_model_id,
             device_map=device,
-            trust_remote_code=True,
+            dtype=torch.bfloat16,
         )
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-        self.sample_rate = 24000
-        print("TTS model loaded.")
 
-    def synthesize(
+        print(f"Loading Base model: {user_model_id}")
+        self.base_model = Qwen3TTSModel.from_pretrained(
+            user_model_id,
+            device_map=device,
+            dtype=torch.bfloat16,
+        )
+
+        self._user_prompts: dict[str, object] = {}  # cache voice clone prompts
+        print("TTS models loaded.")
+
+    def synthesize_assistant(
         self,
         text: str,
-        ref_audio_path: str | None = None,
+        speaker: str,
         instruct: str | None = None,
-    ) -> np.ndarray:
-        """Generate speech from text with optional voice cloning and style control.
+    ) -> tuple[np.ndarray, int]:
+        """Synthesize assistant turn using CustomVoice (preset + instruct).
 
-        Args:
-            text: Text to speak
-            ref_audio_path: Path to reference audio for voice cloning
-            instruct: Style instruction (e.g. "sarcastic, dry delivery")
-
-        Returns:
-            Audio waveform as numpy array (mono, self.sample_rate Hz)
+        Returns (waveform, sample_rate).
         """
-        # Build the generation prompt based on Qwen3-TTS API
-        # The exact API depends on Qwen3-TTS version; adjust as needed
-        messages = []
-
-        if instruct:
-            messages.append({"role": "system", "content": f"[instruct] {instruct}"})
-
-        content_parts = []
-        if ref_audio_path and Path(ref_audio_path).exists():
-            content_parts.append({"type": "audio", "audio": ref_audio_path})
-        content_parts.append({"type": "text", "text": text})
-
-        messages.append({"role": "user", "content": content_parts})
-
-        # Generate using Qwen3-TTS
-        # NOTE: The actual Qwen3-TTS API may differ. This matches the expected
-        # transformers-based interface. Adjust after testing.
-        inputs = self.tokenizer.apply_chat_template(
-            messages, return_tensors="pt", tokenize=True
+        kwargs = dict(
+            text=text,
+            language="English",
+            speaker=speaker,
         )
-        if isinstance(inputs, dict):
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        else:
-            inputs = inputs.to(self.device)
+        if instruct:
+            kwargs["instruct"] = instruct
 
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs if isinstance(inputs, dict) else {"input_ids": inputs},
-                max_new_tokens=4096,
+        wavs, sr = self.cv_model.generate_custom_voice(**kwargs)
+        audio = wavs[0] if isinstance(wavs, list) else wavs
+        if isinstance(audio, torch.Tensor):
+            audio = audio.cpu().numpy()
+        return audio.astype(np.float32), sr
+
+    def synthesize_user_clone(
+        self,
+        text: str,
+        ref_audio: str,
+        ref_text: str = "",
+    ) -> tuple[np.ndarray, int]:
+        """Synthesize user turn using Base model (voice cloning).
+
+        Returns (waveform, sample_rate).
+        """
+        # Cache the voice clone prompt for reuse across turns
+        if ref_audio not in self._user_prompts:
+            self._user_prompts[ref_audio] = self.base_model.create_voice_clone_prompt(
+                ref_audio=ref_audio,
+                ref_text=ref_text or "Reference audio.",
+                x_vector_only_mode=not bool(ref_text),
             )
 
-        # Decode audio from model output
-        # Qwen3-TTS outputs audio tokens that need decoding
-        audio = self._decode_audio(outputs)
-        return audio
-
-    def _decode_audio(self, outputs) -> np.ndarray:
-        """Decode model outputs to audio waveform.
-
-        NOTE: Implementation depends on Qwen3-TTS audio codec.
-        This is a placeholder that should be adapted once the
-        actual Qwen3-TTS decoding pipeline is confirmed.
-        """
-        # Qwen3-TTS typically has a dedicated decode method
-        if hasattr(self.model, "decode_audio"):
-            audio = self.model.decode_audio(outputs)
-        elif hasattr(self.model, "generate_audio"):
-            audio = outputs  # Some models return audio directly
-        else:
-            # Fallback: assume outputs contain audio tokens to decode
-            audio = outputs.cpu().numpy().flatten()
-
+        wavs, sr = self.base_model.generate_voice_clone(
+            text=text,
+            language="English",
+            voice_clone_prompt=self._user_prompts[ref_audio],
+        )
+        audio = wavs[0] if isinstance(wavs, list) else wavs
         if isinstance(audio, torch.Tensor):
-            audio = audio.cpu().numpy().flatten()
+            audio = audio.cpu().numpy()
+        return audio.astype(np.float32), sr
 
-        # Normalize
-        if audio.max() > 0:
-            audio = audio / max(abs(audio.max()), abs(audio.min())) * 0.95
+    def synthesize_user_preset(
+        self,
+        text: str,
+        speaker: str,
+    ) -> tuple[np.ndarray, int]:
+        """Fallback: synthesize user turn using CustomVoice preset (no cloning)."""
+        wavs, sr = self.cv_model.generate_custom_voice(
+            text=text,
+            language="English",
+            speaker=speaker,
+        )
+        audio = wavs[0] if isinstance(wavs, list) else wavs
+        if isinstance(audio, torch.Tensor):
+            audio = audio.cpu().numpy()
+        return audio.astype(np.float32), sr
 
-        return audio.astype(np.float32)
+
+def resample_if_needed(audio: np.ndarray, src_sr: int, target_sr: int) -> np.ndarray:
+    """Resample audio if sample rates don't match."""
+    if src_sr == target_sr:
+        return audio
+    import librosa
+    return librosa.resample(audio, orig_sr=src_sr, target_sr=target_sr)
 
 
 def synthesize_conversation(
-    synthesizer: TTSSynthesizer,
+    synth: TTSSynthesizer,
     transcript: dict,
     output_dir: Path,
+    target_sr: int = 24000,
     max_retries: int = 3,
 ) -> dict | None:
-    """Synthesize all turns of a conversation.
+    """Synthesize all turns of a conversation. Saves each turn immediately.
 
-    Returns updated transcript with audio paths, or None on failure.
+    Returns updated transcript with audio_path per turn, or None on failure.
     """
     conv_id = transcript["id"]
     conv_dir = ensure_dir(output_dir / conv_id)
-    assistant_ref = transcript.get("assistant_voice", {}).get("ref_path")
-    user_ref = transcript.get("user_voice", {}).get("ref_path")
 
-    audio_turns = []
+    assistant_voice = transcript.get("assistant_voice", {})
+    user_voice = transcript.get("user_voice", {})
+
+    updated_turns = []
     for i, turn in enumerate(transcript["turns"]):
         role = turn["role"]
         text = turn["text"]
-        tts_instruct = turn.get("tts_instruct")
-        ref_path = assistant_ref if role == "assistant" else user_ref
-
         out_path = conv_dir / f"turn_{i:03d}_{role}.wav"
 
+        # Resume: skip if already exists
         if out_path.exists():
-            audio_turns.append(
-                {
-                    **turn,
-                    "audio_path": str(out_path),
-                }
-            )
+            updated_turns.append({**turn, "audio_path": str(out_path)})
             continue
 
         success = False
         for retry in range(max_retries):
             try:
-                audio = synthesizer.synthesize(
-                    text=text,
-                    ref_audio_path=ref_path,
-                    instruct=tts_instruct,
-                )
-                sf.write(str(out_path), audio, synthesizer.sample_rate)
-                audio_turns.append(
-                    {
-                        **turn,
-                        "audio_path": str(out_path),
-                    }
-                )
+                if role == "assistant":
+                    audio, sr = synth.synthesize_assistant(
+                        text=text,
+                        speaker=assistant_voice.get("speaker", "Ryan"),
+                        instruct=turn.get("tts_instruct"),
+                    )
+                else:
+                    # User: clone or preset fallback
+                    if user_voice.get("model") == "Base" and user_voice.get("ref_path"):
+                        audio, sr = synth.synthesize_user_clone(
+                            text=text,
+                            ref_audio=user_voice["ref_path"],
+                            ref_text=user_voice.get("ref_text", ""),
+                        )
+                    else:
+                        audio, sr = synth.synthesize_user_preset(
+                            text=text,
+                            speaker=user_voice.get("speaker", "Eric"),
+                        )
+
+                # Resample to target and save
+                audio = resample_if_needed(audio, sr, target_sr)
+                # Normalize
+                peak = np.abs(audio).max()
+                if peak > 0:
+                    audio = audio * (0.95 / peak)
+                sf.write(str(out_path), audio, target_sr)
+
+                updated_turns.append({**turn, "audio_path": str(out_path)})
                 success = True
                 break
+
             except Exception as e:
-                print(f"  [RETRY {retry+1}] Turn {i} ({role}): {e}")
+                print(f"  [RETRY {retry + 1}] {conv_id} turn {i} ({role}): {e}")
 
         if not success:
-            print(f"  [FAIL] Could not synthesize turn {i} for {conv_id}")
+            print(f"  [FAIL] {conv_id} turn {i}")
             return None
 
-    transcript["turns"] = audio_turns
-    return transcript
+    result = {**transcript, "turns": updated_turns}
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description="Synthesize TTS audio")
     parser.add_argument("--config", type=str, default="configs/generation.yaml")
-    parser.add_argument("--assignments_dir", type=str, default="data/voice_assignments")
+    parser.add_argument("--assignments_dir", type=str, default=None)
     parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -192,9 +216,15 @@ def main():
     cfg = load_yaml(args.config)["tts"]
     set_seed(args.seed)
 
-    synthesizer = TTSSynthesizer(model_id=cfg["model_id"], device=cfg["device"])
+    synth = TTSSynthesizer(
+        assistant_model_id=cfg["assistant_model_id"],
+        user_model_id=cfg["user_model_id"],
+        device=cfg.get("device", "cuda:0"),
+    )
+
+    assignments_dir = Path(args.assignments_dir or load_yaml(args.config)["voices"]["output_dir"])
     output_dir = ensure_dir(cfg["output_dir"])
-    assignments_dir = Path(args.assignments_dir)
+    target_sr = cfg.get("sample_rate", 24000)
 
     for cat_dir in sorted(assignments_dir.iterdir()):
         if not cat_dir.is_dir():
@@ -204,12 +234,23 @@ def main():
 
         cat_output = ensure_dir(output_dir / cat_dir.name)
         transcripts = sorted(cat_dir.glob("*.json"))
-        print(f"\n=== Synthesizing {len(transcripts)} conversations for {cat_dir.name} ===")
 
-        for transcript_path in tqdm(transcripts, desc=cat_dir.name):
+        # Resume: find already completed
+        done = {p.stem.replace("_synth", "") for p in cat_output.glob("*_synth.json")}
+        remaining = [t for t in transcripts if t.stem not in done]
+
+        if not remaining:
+            print(f"[SKIP] {cat_dir.name}: all {len(transcripts)} done")
+            continue
+
+        print(f"\n=== {cat_dir.name}: {len(remaining)} remaining ({len(done)} done) ===")
+
+        for transcript_path in tqdm(remaining, desc=cat_dir.name):
             transcript = load_json(transcript_path)
             result = synthesize_conversation(
-                synthesizer, transcript, cat_output, max_retries=cfg["max_retries"]
+                synth, transcript, cat_output,
+                target_sr=target_sr,
+                max_retries=cfg.get("max_retries", 3),
             )
             if result:
                 save_json(result, cat_output / f"{transcript['id']}_synth.json")

@@ -335,12 +335,25 @@ for turn in conversation.turns:
 # Note: ref_audio NEVER changes — only instruct does.
 ```
 
-### Why Qwen3-TTS is critical for our approach:
-- `ref_audio` keeps voice identity (gender, age, timbre) STABLE across style changes
-- `instruct` controls style PER TURN — exactly what dynamic steering needs
-- For counterfactual pairs: same `ref_audio` + same text + different `instruct` = clean comparison
-- A style change mid-conversation is just a change in the `instruct` string
-- The ref_audio/instruct separation naturally enforces our immutable/mutable hierarchy
+### Qwen3-TTS Architecture (IMPORTANT)
+
+**`ref_audio` and `instruct` CANNOT be used simultaneously** — they're separate models:
+- **Base model** (`Qwen3-TTS-12Hz-1.7B-Base`): voice cloning via `ref_audio` (no instruct)
+- **CustomVoice model** (`Qwen3-TTS-12Hz-1.7B-CustomVoice`): 9 preset speakers + `instruct` for style
+
+**Our solution — dual-model pipeline:**
+
+| Role | Model | Voice Identity | Style Control |
+|------|-------|---------------|---------------|
+| Assistant | CustomVoice | Preset speaker (Ryan/Dylan/Vivian/Serena) | `instruct` per turn |
+| User | Base | `ref_audio` from voice pool | None (natural speech) |
+
+This works because:
+- Assistant needs both voice consistency AND style variability → CustomVoice gives both
+- User just needs diverse natural voices → Base model voice cloning gives this
+- For counterfactual pairs: same preset speaker + same text + different `instruct` = clean comparison
+- The preset/instruct separation naturally enforces our immutable/mutable hierarchy
+- Qwen3-TTS is only for TRAINING DATA — at inference, the trained Moshi model generates audio directly
 
 ### Quality filtering pipeline:
 - UTMOS score > 3.5 for naturalness
@@ -349,10 +362,10 @@ for turn in conversation.turns:
 - For counterfactual pairs: verify the two variants actually SOUND different (style classifier)
 - Discard and regenerate failures
 
-### Open questions:
-- Can Qwen3-TTS do ref_audio + instruct simultaneously? Test early in pilot.
-- How well does instruct handle accent control? May need accent-matched ref_audio as backup.
-- Does voice identity drift when instruct changes dramatically? Measure with speaker sim.
+### Resolved questions:
+- ~~Can Qwen3-TTS do ref_audio + instruct simultaneously?~~ **NO.** Separate models. Solved with dual-model pipeline.
+- How well does CustomVoice instruct handle accent control? **Test early in pilot.**
+- Does voice identity stay stable across different instruct values? **Test in pilot (same preset speaker, varying instruct).**
 
 ---
 
@@ -565,7 +578,7 @@ Manifest composition:
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Qwen3-TTS instruct doesn't change style enough | Counterfactual pairs look identical | Test early; fall back to sox/praat post-processing for speed; use accent-matched refs for accent |
-| Qwen3-TTS ref_audio + instruct don't work simultaneously | Can't maintain voice while changing style | Test in week 1; fall back to two-step: clone then post-process |
+| ~~Qwen3-TTS ref_audio + instruct don't work simultaneously~~ | ~~RESOLVED~~ | Dual-model pipeline: CustomVoice for assistant (preset + instruct), Base for user (ref_audio cloning) |
 | Model ignores user steering instructions | Core contribution fails | Increase dynamic steering data %; ensure steering turns are diverse; add steering-specific examples to A8 |
 | Voice identity drifts when style changes | Control leakage | Measure speaker sim in quality filter; use same ref_audio consistently; consider DPO on voice stability |
 | Compositional generalization doesn't emerge | Weaker claim | Still report what composes; analyze failure modes (publishable negative result) |
