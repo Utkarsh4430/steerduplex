@@ -1,15 +1,19 @@
 # SteerDuplex data generation config
 
 # Phase 1: Transcript generation via LiteLLM
+# LiteLLM supports 100+ providers: https://docs.litellm.ai/docs/providers
+# Model format: "provider/model" e.g. "openai/gpt-4o", "anthropic/claude-3-opus"
+# For self-hosted: set llm_base_url to your endpoint
 transcript:
-  llm_model: "openai/Qwen/Qwen3-32B"  # litellm model string (prefix with provider)
-  llm_base_url: "http://localhost:8000/v1"  # vLLM or any OpenAI-compatible endpoint
-  llm_api_key: "unused"  # set if your endpoint needs auth
+  llm_model: "Qwen/Qwen3-32B"  # model name as expected by your LiteLLM proxy
+  llm_base_url: ""  # LiteLLM proxy URL (e.g., "http://localhost:4000/v1")
+  llm_api_key: ""  # API key for LiteLLM proxy (or set OPENAI_API_KEY env var)
   temperature: 0.9
   max_tokens: 4096
   turns_range: [4, 12]
   categories_dir: "../data_categories"
   output_dir: "data/transcripts"
+  num_workers: 8  # parallel LLM workers for transcript generation
   pilot_per_category:
     A1_customer_service: 60
     A2_qa_assistant: 60

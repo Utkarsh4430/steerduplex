@@ -1,4 +1,4 @@
-"""Phase 1: Generate conversation transcripts using LLMs via LiteLLM.
+"""Phase 1: Generate conversation transcripts using LLMs via OpenAI SDK + LiteLLM proxy.
 
 Supports all 5 data types: standard, dynamic, counterfactual, long_form, graceful_failure.
 Supports all 10 categories: A1-A10.
@@ -14,12 +14,18 @@ import argparse
 import json
 import random
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import openai
 from openai import OpenAI
 
 from pipeline.utils import ensure_dir, load_all_categories, load_yaml, save_json, set_seed
+
+# Module-level client, initialized in main()
+_client: OpenAI | None = None
 
 # ---------------------------------------------------------------------------
 # System prompt templates (role + boundaries, NEVER style/tone)
@@ -390,10 +396,9 @@ def build_llm_prompt(traits: dict, data_type: str, system_prompt: str, turns_ran
 
 
 # ---------------------------------------------------------------------------
-# LLM call with retry + backoff
+# LLM call via OpenAI SDK (pointing at LiteLLM proxy) with retry + backoff
 # ---------------------------------------------------------------------------
 def call_llm(
-    client: OpenAI,
     model: str,
     prompt: str,
     temperature: float,
@@ -401,10 +406,10 @@ def call_llm(
     max_retries: int = 3,
     retry_wait_sec: float = 5.0,
 ) -> str | None:
-    """Call the LLM with retry logic. Returns raw text or None."""
+    """Call the LLM via OpenAI SDK with retry logic. Returns raw text or None."""
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
+            response = _client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
@@ -412,13 +417,12 @@ def call_llm(
             )
             return response.choices[0].message.content.strip()
 
+        except openai.RateLimitError:
+            wait = retry_wait_sec * (2 ** attempt)
+            print(f"  [RATE LIMIT] Waiting {wait:.0f}s before retry {attempt + 1}/{max_retries}")
+            time.sleep(wait)
         except Exception as e:
-            err_str = str(e).lower()
-            if "rate" in err_str or "429" in err_str or "quota" in err_str:
-                wait = retry_wait_sec * (2 ** attempt)
-                print(f"  [RATE LIMIT] Waiting {wait:.0f}s before retry {attempt + 1}/{max_retries}")
-                time.sleep(wait)
-            elif attempt < max_retries - 1:
+            if attempt < max_retries - 1:
                 print(f"  [RETRY {attempt + 1}] {e}")
                 time.sleep(2)
             else:
@@ -458,7 +462,6 @@ def parse_llm_response(content: str) -> dict | None:
 # Main
 # ---------------------------------------------------------------------------
 def generate_single(
-    client: OpenAI,
     model: str,
     category_id: str,
     category_data: dict,
@@ -474,13 +477,12 @@ def generate_single(
     system_prompt = build_system_prompt(traits)
     prompt = build_llm_prompt(traits, data_type, system_prompt, turns_range)
 
-    content = call_llm(client, model, prompt, temperature, max_tokens, max_retries, retry_wait_sec)
+    content = call_llm(model, prompt, temperature, max_tokens, max_retries, retry_wait_sec)
     transcript = parse_llm_response(content)
 
     if transcript is None:
         return None
 
-    # Enrich with metadata
     transcript["category"] = category_id
     transcript["data_type"] = data_type
     transcript["system_prompt"] = f"<system> {system_prompt} <system>"
@@ -489,25 +491,51 @@ def generate_single(
     return transcript
 
 
+# Thread-safe counter for assigning sequential IDs
+_counter_lock = threading.Lock()
+
+
+def _worker(
+    model: str,
+    category_id: str,
+    category_data: dict,
+    dt_weights: dict,
+    cfg: dict,
+) -> dict | None:
+    """Worker function for ThreadPoolExecutor."""
+    data_type = sample_data_type(dt_weights, category_id)
+    return generate_single(
+        model=model,
+        category_id=category_id,
+        category_data=category_data,
+        data_type=data_type,
+        temperature=cfg["temperature"],
+        max_tokens=cfg["max_tokens"],
+        turns_range=tuple(cfg["turns_range"]),
+        max_retries=cfg.get("max_retries", 3),
+        retry_wait_sec=cfg.get("retry_wait_sec", 5),
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate conversation transcripts")
     parser.add_argument("--config", type=str, default="configs/generation.yaml")
     parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--num_conversations", type=int, default=None)
+    parser.add_argument("--num_workers", type=int, default=None, help="Parallel LLM workers (default: from config)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)["transcript"]
     set_seed(args.seed)
 
-    # LiteLLM-compatible: use the model string directly with OpenAI client
-    # The model string can include provider prefix (e.g., "openai/Qwen/Qwen3-32B")
+    # Configure OpenAI client (pointing at LiteLLM proxy)
+    global _client
     model = cfg["llm_model"]
-    # Strip provider prefix for the OpenAI client if base_url is set
-    if "/" in model and cfg.get("llm_base_url"):
-        model = model.split("/", 1)[-1]  # "openai/Qwen/Qwen3-32B" -> "Qwen/Qwen3-32B"
+    base_url = cfg.get("llm_base_url") or None
+    api_key = cfg.get("llm_api_key") or "unused"
+    _client = OpenAI(base_url=base_url, api_key=api_key)
 
-    client = OpenAI(base_url=cfg["llm_base_url"], api_key=cfg.get("llm_api_key", "unused"))
     categories = load_all_categories(cfg["categories_dir"])
     output_dir = ensure_dir(cfg["output_dir"])
 
@@ -516,8 +544,7 @@ def main():
 
     pilot_counts = cfg.get("pilot_per_category", {})
     dt_weights = cfg.get("data_type_weights", {"standard": 1.0})
-    max_retries = cfg.get("max_retries", 3)
-    retry_wait = cfg.get("retry_wait_sec", 5)
+    num_workers = args.num_workers or cfg.get("num_workers", 8)
 
     for cat_id, cat_data in sorted(categories.items()):
         if isinstance(pilot_counts, dict):
@@ -527,43 +554,67 @@ def main():
 
         cat_dir = ensure_dir(output_dir / cat_id)
 
-        # Resume: find already generated
-        existing = set()
-        for p in cat_dir.glob("*.json"):
-            existing.add(p.stem)
+        # Resume: count already generated
+        existing = sorted(cat_dir.glob("*.json"))
         start_idx = len(existing)
 
         if start_idx >= num_target:
             print(f"[SKIP] {cat_id}: already have {start_idx}/{num_target}")
             continue
 
-        print(f"\n=== {cat_id}: generating {num_target - start_idx} more (have {start_idx}/{num_target}) ===")
+        remaining = num_target - start_idx
+        print(f"\n=== {cat_id}: generating {remaining} more (have {start_idx}/{num_target}) | workers={num_workers} ===")
 
         generated = start_idx
-        attempts = 0
-        max_attempts = (num_target - start_idx) * 3
+        failed = 0
+        max_failures = remaining * 2  # give up after too many failures
 
-        while generated < num_target and attempts < max_attempts:
-            attempts += 1
-            data_type = sample_data_type(dt_weights, cat_id)
+        # Use ThreadPoolExecutor for parallel LLM calls
+        with ThreadPoolExecutor(max_workers=num_workers) as pool:
+            # Submit initial batch
+            futures = {}
+            batch_size = min(remaining, num_workers * 2)
+            for _ in range(batch_size):
+                fut = pool.submit(_worker, model, cat_id, cat_data, dt_weights, cfg)
+                futures[fut] = True
 
-            transcript = generate_single(
-                client=client, model=model,
-                category_id=cat_id, category_data=cat_data,
-                data_type=data_type,
-                temperature=cfg["temperature"], max_tokens=cfg["max_tokens"],
-                turns_range=tuple(cfg["turns_range"]),
-                max_retries=max_retries, retry_wait_sec=retry_wait,
-            )
+            while generated < num_target and failed < max_failures:
+                done_futures = []
+                for fut in as_completed(futures):
+                    done_futures.append(fut)
+                    try:
+                        transcript = fut.result()
+                    except Exception as e:
+                        print(f"  [ERROR] Worker exception: {e}")
+                        transcript = None
 
-            if transcript is not None:
-                transcript["id"] = f"{cat_id}_{generated:05d}"
-                save_json(transcript, cat_dir / f"{generated:05d}.json")
-                generated += 1
-                if generated % 10 == 0:
-                    print(f"  {generated}/{num_target} done")
+                    if transcript is not None:
+                        with _counter_lock:
+                            transcript["id"] = f"{cat_id}_{generated:05d}"
+                            save_json(transcript, cat_dir / f"{generated:05d}.json")
+                            generated += 1
+                            if generated % 10 == 0:
+                                print(f"  {generated}/{num_target} done")
+                    else:
+                        failed += 1
 
-        print(f"  Completed: {generated}/{num_target} (attempts: {attempts})")
+                    # Submit replacement if still need more
+                    if generated < num_target and failed < max_failures:
+                        new_fut = pool.submit(_worker, model, cat_id, cat_data, dt_weights, cfg)
+                        futures[new_fut] = True
+
+                    # Stop if target reached
+                    if generated >= num_target:
+                        break
+
+                # Remove completed futures
+                for fut in done_futures:
+                    futures.pop(fut, None)
+
+                if generated >= num_target:
+                    break
+
+        print(f"  Completed: {generated}/{num_target} (failed: {failed})")
 
 
 if __name__ == "__main__":

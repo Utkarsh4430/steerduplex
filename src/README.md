@@ -11,8 +11,9 @@ conda activate steerduplex
 
 # 2. Populate voice database (see Voice Database section below)
 
-# 3. Start your LLM endpoint (vLLM example)
-vllm serve Qwen/Qwen3-32B --port 8000
+# 3. Start your LiteLLM proxy (see https://docs.litellm.ai/docs/proxy/quick_start)
+litellm --model Qwen/Qwen3-32B --port 4000
+# Then set llm_base_url: "http://localhost:4000/v1" in configs/generation.yaml
 
 # 4. Run full pipeline
 python run_pipeline.py --config configs/generation.yaml
