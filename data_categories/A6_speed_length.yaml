@@ -4,9 +4,13 @@
 
 description: >
   Conversations testing the model's ability to control speaking speed
-  and response length based on system prompt instructions. This tests
-  the most basic form of steerability — can the model speak faster/slower
-  and give shorter/longer responses on command?
+  and response length based on user instructions. The USER requests
+  the speed/length at the start (e.g., "keep it brief" or "speak slowly").
+  This tests the most basic form of steerability — can the model speak
+  faster/slower and give shorter/longer responses on command?
+  System prompt is minimal (role only).
+
+  NOTE: For DYNAMIC speed/length changes mid-conversation, see A9_dynamic_steering.yaml.
 
 speed_controls:
   very_fast:

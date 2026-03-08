@@ -1,0 +1,62 @@
+# SteerDuplex Pilot Training Config
+# Based on moshi-finetune/example/moshi_7B.yaml
+
+# Data
+data:
+  train_data: "data/formatted/manifest.jsonl"
+  eval_data: ""
+  shuffle: true
+
+# Model — start from Moshi 7B base weights
+moshi_paths:
+  hf_repo_id: "kyutai/moshiko-pytorch-bf16"
+
+# LoRA for pilot (cheaper, faster iteration)
+full_finetuning: false
+lora:
+  enable: true
+  rank: 128
+  scaling: 2.0
+  ft_embed: false
+
+# Loss weighting
+# first_codebook (semantic audio tokens) weighted 100x higher
+# text_padding down-weighted since most of text stream is padding
+first_codebook_weight_multiplier: 100.0
+text_padding_weight: 0.5
+
+# Training
+duration_sec: 100        # max sequence length = 100s
+batch_size: 4            # per-GPU; adjust for your VRAM
+max_steps: 2000          # ~500 convos, 100s each, should be enough
+num_microbatches: 1
+gradient_checkpointing: true
+
+# Optimizer
+optim:
+  lr: 2e-6
+  weight_decay: 0.1
+  pct_start: 0.05       # 5% warmup
+
+# Precision
+param_dtype: "bfloat16"
+
+# Checkpointing
+seed: 42
+log_freq: 1
+eval_freq: 0
+do_eval: false
+do_ckpt: true
+ckpt_freq: 200
+num_ckpt_keep: 3
+save_adapters: true
+
+# Output
+run_dir: "runs/pilot_v1"
+
+# Weights & Biases (uncomment to enable)
+# wandb:
+#   project: "steerduplex"
+#   run_name: "pilot_v1_lora128"
+#   key: ""
+#   offline: false

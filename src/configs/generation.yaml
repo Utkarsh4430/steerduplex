@@ -1,0 +1,55 @@
+# SteerDuplex data generation config
+
+# Phase 1: Transcript generation
+transcript:
+  llm_model: "Qwen/Qwen3-32B"  # vLLM-served model
+  llm_base_url: "http://localhost:8000/v1"  # vLLM endpoint
+  temperature: 0.9
+  max_tokens: 4096
+  turns_range: [4, 12]  # min/max turns per conversation
+  categories_dir: "../data_categories"
+  output_dir: "data/transcripts"
+  pilot_per_category: 70  # conversations per category for pilot
+  system_prompt_granularities: ["minimal", "detailed", "highly_detailed"]
+
+# Phase 2: Voice assignment
+voices:
+  assistant_voices_dir: "data/voices/assistant"  # 3-4 curated refs
+  user_voices_dir: "data/voices/user"  # large pool
+  num_assistant_voices: 4
+  ref_duration_range: [3.0, 10.0]  # seconds for voice ref clips
+  output_dir: "data/voice_assignments"
+
+# Phase 3: TTS synthesis
+tts:
+  model_id: "Qwen/Qwen3-TTS"
+  device: "cuda"
+  sample_rate: 24000
+  output_dir: "data/tts_audio"
+  batch_size: 1  # Qwen3-TTS processes one at a time
+  max_retries: 3
+
+# Phase 4: Channel assembly
+assembly:
+  sample_rate: 24000  # match TTS output
+  silence_range_ms: [200, 800]  # inter-turn silence
+  barge_in_prob: 0.05  # probability of overlapping turns
+  barge_in_overlap_ms: [100, 500]
+  max_duration_sec: 100  # moshi-finetune limit
+  output_dir: "data/assembled"
+  # System prompt prepending
+  voice_prompt_duration_sec: 5.0  # voice ref prepended to assistant channel
+  sine_marker_freq_hz: 440
+  sine_marker_duration_ms: 200
+
+# Phase 5: Dataset formatting
+dataset:
+  output_dir: "data/formatted"
+  manifest_path: "data/formatted/manifest.jsonl"
+
+# Quality filtering
+quality:
+  utmos_threshold: 3.5
+  wer_threshold: 0.15  # max word error rate
+  speaker_sim_threshold: 0.75  # min cosine similarity
+  whisper_model: "medium"

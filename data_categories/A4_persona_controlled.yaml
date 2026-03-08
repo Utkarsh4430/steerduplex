@@ -4,8 +4,12 @@
 
 description: >
   Conversations where the assistant adopts a specific persona/character.
-  The persona affects vocabulary, speaking style, knowledge domain,
-  and voice characteristics. Must stay in character across all turns.
+  The USER requests the persona at the start (e.g., "pretend you're a pirate"
+  or "talk to me like a therapist"). The persona affects vocabulary, speaking
+  style, knowledge domain, and voice characteristics. Must stay in character
+  across all turns. System prompt is minimal (role only).
+
+  NOTE: For DYNAMIC persona changes mid-conversation, see A9_dynamic_steering.yaml.
 
 personas:
   occupational:

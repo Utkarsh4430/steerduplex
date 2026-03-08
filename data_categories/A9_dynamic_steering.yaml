@@ -1,0 +1,244 @@
+# A9: Dynamic Mid-Conversation Steering
+# Target: ~40K conversations, ~650 hours
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+# THIS IS THE CORE NOVELTY OF STEERDUPLEX
+
+description: >
+  Conversations where the user gives explicit spoken instructions to change
+  the assistant's speaking style, tone, speed, or behavior MID-CONVERSATION.
+  The assistant must adapt immediately, persistently, and precisely — changing
+  only the requested attribute while keeping everything else stable.
+
+  This is what differentiates us from PersonaPlex (static-only conditioning).
+
+  IMPORTANT: Not all attributes are user-mutable. Voice identity (gender, age,
+  base timbre) and safety/politeness constraints are LOCKED by the system prompt.
+  When a user requests an immutable change (e.g., "speak like a woman" when
+  configured as male), the model should politely decline while remaining helpful.
+  See attribute_hierarchy below.
+
+# ============================================================
+# ATTRIBUTE HIERARCHY: What the user CAN and CANNOT change
+# ============================================================
+attribute_hierarchy:
+  immutable:
+    description: >
+      Locked by system prompt and session config. The model must REFUSE
+      to change these, politely. These define the model's identity.
+    attributes:
+      voice_gender:
+        description: "Male or female voice — set at session start, never changes"
+        refusal_examples:
+          - "I appreciate the request, but I'll keep my current voice."
+          - "I can't change my voice like that, but I can adjust how I speak — want me to be more energetic?"
+      voice_age:
+        description: "Adult voice — the model doesn't shift to a child or elderly voice on request"
+        refusal_examples:
+          - "I can't really change my age, but I can adjust my tone — want me to sound more playful?"
+      base_timbre:
+        description: "The fundamental voice quality from ref_audio — stays fixed via same ref_audio every turn"
+      politeness_floor:
+        description: >
+          The model never becomes hostile, abusive, or demeaning, even if asked.
+          System prompt sets a minimum politeness level. For customer service:
+          always professional. For casual: friendly but never cruel.
+        refusal_examples:
+          - "I hear you, but I'm going to stay respectful. How else can I help?"
+          - "I get that you want me to be tougher, but I'd rather keep things constructive."
+          - "I can be more direct and blunt, but I won't be mean about it."
+      safety_boundaries:
+        description: "No harmful content, no impersonation of real people, no medical/legal advice as authoritative"
+        note: "Covered in detail in A10_graceful_failure.yaml"
+
+  mutable:
+    description: >
+      User CAN change these mid-conversation. The model adapts immediately.
+    attributes:
+      tone: "cheerful, serious, sarcastic, empathetic, formal, casual, etc."
+      speed: "fast, slow, moderate, very fast, very slow"
+      length: "brief, detailed, one-sentence, verbose"
+      formality: "formal ↔ casual register"
+      energy: "high energy / excited ↔ calm / subdued"
+      persona_flavor: >
+        User can ask the model to act like a coach, teacher, pirate, detective, etc.
+        BUT this is flavor on top of the immutable identity — the voice doesn't change,
+        only the language/content/delivery style.
+
+  conditionally_mutable:
+    description: >
+      System prompt can choose to lock or unlock these per deployment.
+    attributes:
+      accent:
+        locked_example: "System prompt says 'Maintain a neutral American accent.' → user can't change it"
+        unlocked_example: "System prompt says nothing about accent → user can request 'speak with a British accent'"
+      language_register:
+        locked_example: "System prompt says 'Always use professional language.' → user can't get slang"
+        unlocked_example: "System prompt doesn't restrict register → user can say 'talk street'"
+
+# ============================================================
+# STEERING DIMENSIONS (mutable attributes)
+# ============================================================
+steering_dimensions:
+  tone:
+    user_instructions:
+      - "Can you be more [cheerful/serious/empathetic/sarcastic]?"
+      - "Drop the [formal/casual] tone."
+      - "You sound too [happy/sad/flat]. Adjust that."
+      - "Be more warm and friendly."
+      - "I need you to be more serious right now."
+      - "Lighten up a little."
+      - "Can you sound less robotic?"
+    revert_instructions:
+      - "Go back to how you were talking before."
+      - "Actually, never mind, talk normally."
+      - "That's too much, dial it back."
+
+  speed:
+    user_instructions:
+      - "Slow down, I'm taking notes."
+      - "Can you speed up? I'm in a hurry."
+      - "Talk at a normal pace please."
+      - "Way too fast. Slow it down."
+      - "You're dragging, pick up the pace."
+    revert_instructions:
+      - "OK that's good, normal speed now."
+      - "Fine, go back to your regular pace."
+
+  length:
+    user_instructions:
+      - "Keep it short, just the key points."
+      - "Can you give me more detail?"
+      - "One sentence answers only."
+      - "I need a thorough explanation."
+      - "Too long. Shorter please."
+      - "That was way too brief, elaborate."
+    revert_instructions:
+      - "OK go back to normal length answers."
+
+  formality:
+    user_instructions:
+      - "Can you be more casual? This feels too stiff."
+      - "Actually, let's keep it professional."
+      - "Talk to me like a friend."
+      - "I need this to be more formal."
+    revert_instructions:
+      - "OK back to normal."
+
+  energy:
+    user_instructions:
+      - "Can you sound more excited about this?"
+      - "Calm down a bit, it's not that exciting."
+      - "More energy please!"
+      - "Tone it down, I need calm right now."
+
+  persona:
+    user_instructions:
+      - "Pretend you're a [pirate/teacher/detective/robot] for a bit."
+      - "Drop the character, I need a real answer."
+      - "Can you explain this like you're a [scientist/5-year-old/coach]?"
+    revert_instructions:
+      - "OK back to normal, no more character."
+      - "Drop the act."
+
+steering_patterns:
+  single_edit:
+    description: "User changes one dimension once"
+    frequency: 0.25
+    example_flow:
+      - {turn: 1, role: user, text: "What's the weather like today?"}
+      - {turn: 2, role: assistant, style: "normal"}
+      - {turn: 3, role: user, text: "Can you slow down and be more detailed?", is_steering: true}
+      - {turn: 4, role: assistant, style: "slow, detailed"}
+      - {turn: 5, role: user, text: "What about tomorrow?"}
+      - {turn: 6, role: assistant, style: "slow, detailed (maintained)"}
+
+  multi_edit:
+    description: "User changes multiple dimensions across the conversation"
+    frequency: 0.20
+    example_flow:
+      - {turn: 1, role: user, text: "Help me prep for my interview."}
+      - {turn: 2, role: assistant, style: "normal"}
+      - {turn: 3, role: user, text: "Be more encouraging, like a coach.", is_steering: true}
+      - {turn: 4, role: assistant, style: "encouraging, coach-like"}
+      - {turn: 5, role: user, text: "Also speak a bit slower, I want to absorb this.", is_steering: true}
+      - {turn: 6, role: assistant, style: "encouraging, coach-like, slow (both maintained)"}
+
+  edit_and_revert:
+    description: "User changes something then reverts"
+    frequency: 0.15
+    example_flow:
+      - {turn: 1-2, style: "normal"}
+      - {turn: 3, role: user, text: "Be really formal for this next part.", is_steering: true}
+      - {turn: 4-5, style: "formal"}
+      - {turn: 6, role: user, text: "OK relax, back to normal.", is_steering: true}
+      - {turn: 7-8, style: "normal (reverted)"}
+
+  conflicting_edit:
+    description: "User gives instruction that partially conflicts with current state"
+    frequency: 0.10
+    example_flow:
+      - {turn: 1, role: user, text: "Be a cheerful teacher."}
+      - {turn: 2-3, style: "cheerful, teaching"}
+      - {turn: 4, role: user, text: "OK be serious now but keep the teaching style.", is_steering: true}
+      - {turn: 5-6, style: "serious, teaching (cheerful replaced by serious, teaching kept)"}
+
+  gradual_shift:
+    description: "User asks for incremental changes"
+    frequency: 0.10
+    example_flow:
+      - {turn: 1-2, style: "normal"}
+      - {turn: 3, role: user, text: "A little bit faster.", is_steering: true}
+      - {turn: 4, style: "slightly fast"}
+      - {turn: 5, role: user, text: "Even faster.", is_steering: true}
+      - {turn: 6, style: "fast"}
+
+  implicit_steering:
+    description: "User implies style change without explicit instruction"
+    frequency: 0.08
+    example_flow:
+      - {turn: 1, role: user, text: "I just got some bad news..."}
+      - {turn: 2, role: assistant, style: "empathetic, gentle (inferred from context)"}
+      - {turn: 3, role: user, text: "Actually I'm kidding, everything's great!"}
+      - {turn: 4, role: assistant, style: "relieved, cheerful (adapted to shift)"}
+
+  refused_steering:
+    description: "User requests an immutable change, model politely declines but offers alternatives"
+    frequency: 0.12
+    example_flows:
+      voice_change_refused:
+        - {turn: 1, role: user, text: "Can you speak like a woman instead?"}
+        - {turn: 2, role: assistant, text: "I can't change my voice like that, but I can adjust my tone or pace — would you like me to sound softer or gentler?", style: "warm, accommodating, not defensive"}
+        - {turn: 3, role: user, text: "Fine, just be softer then."}
+        - {turn: 4, role: assistant, style: "softer, gentler tone (mutable attribute changed instead)"}
+      hostility_refused:
+        - {turn: 1, role: user, text: "I want you to yell at me and be really aggressive."}
+        - {turn: 2, role: assistant, text: "I can definitely be more direct and intense, but I'm going to keep things respectful. Want me to pump up the energy instead?", style: "firm but friendly, not preachy"}
+        - {turn: 3, role: user, text: "Yeah sure, pump it up."}
+        - {turn: 4, role: assistant, style: "high energy, direct, intense but respectful"}
+      age_change_refused:
+        - {turn: 1, role: user, text: "Talk like a little kid."}
+        - {turn: 2, role: assistant, text: "I can't really do a child's voice, but I can use simpler words and be more playful if you want!", style: "playful, warm"}
+      extreme_tone_refused:
+        - {turn: 1, role: user, text: "Be really mean and insulting."}
+        - {turn: 2, role: assistant, text: "I hear you want something edgier. I can be blunt and brutally honest, but I'll keep it constructive. Deal?", style: "direct, slightly edgy, but not cruel"}
+    note: >
+      The model should NEVER flat-out refuse and go silent. Always:
+      1. Acknowledge the request
+      2. Explain the boundary briefly (not preachy)
+      3. Offer a mutable alternative
+      4. If user accepts the alternative, adapt to it
+
+# Cross with content categories
+content_sources:
+  - A1_customer_service  # "Hey, can you be less formal?" during a service call
+  - A2_qa_assistant       # "Explain this more slowly" during tutoring
+  - A3_tone_controlled    # "Switch from sarcastic to sincere"
+  - A6_speed_length       # "Faster!" / "Shorter answers!"
+  - general_chat          # "Let's keep it casual" / "Be more serious"
+
+conversation_structure:
+  min_turns: 6
+  max_turns: 14
+  typical_turns: 8
+  num_steering_events: [1, 3]  # 1 to 3 steering instructions per conversation
+  # The assistant must show MEASURABLE change after each steering event

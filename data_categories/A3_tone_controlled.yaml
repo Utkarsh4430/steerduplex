@@ -4,8 +4,12 @@
 
 description: >
   Conversations where the assistant MUST maintain a specific emotional tone
-  throughout. The system prompt specifies the tone, and every assistant turn
-  should audibly reflect it. This is the core steerability test.
+  throughout. The USER requests the tone at the start of the conversation
+  (e.g., "be sarcastic" or "sound cheerful"), and every assistant turn
+  should audibly reflect it. The system prompt is minimal (role only).
+
+  NOTE: For DYNAMIC tone changes mid-conversation, see A9_dynamic_steering.yaml.
+  This category focuses on the model's ability to adopt and SUSTAIN a requested tone.
 
 tones:
   negative:
@@ -156,3 +160,6 @@ conversation_structure:
     The assistant must maintain the specified tone across ALL turns.
     Minor natural variation is okay (e.g., slightly more intense when making a point)
     but the overall emotional quality must remain consistent.
+  # The user requests the tone at the START, e.g.:
+  # "Hey, can you be really sarcastic today?" or "Talk to me in a cheerful tone."
+  # The system prompt does NOT specify the tone.

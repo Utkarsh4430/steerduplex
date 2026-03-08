@@ -4,8 +4,11 @@
 
 description: >
   Conversations testing the model's ability to adopt specific speaking styles
-  and accents. System prompt specifies the style/accent, and the assistant
-  must maintain it throughout.
+  and accents. The USER requests the style/accent at the start of the conversation
+  (e.g., "talk like a news anchor" or "use a British accent"), and the assistant
+  must maintain it throughout. System prompt is minimal (role only).
+
+  NOTE: For DYNAMIC style changes mid-conversation, see A9_dynamic_steering.yaml.
 
 speaking_styles:
   formal:
