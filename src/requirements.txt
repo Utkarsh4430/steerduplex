@@ -1,0 +1,42 @@
+# SteerDuplex dependencies
+# Install with: pip install -r requirements.txt
+
+# Core ML
+torch==2.6.0
+torchaudio==2.6.0
+
+# Moshi model + training framework
+moshi @ git+https://github.com/kyutai-labs/moshi.git#subdirectory=moshi
+finetune @ git+https://github.com/kyutai-labs/moshi-finetune.git
+
+# TTS
+qwen-tts
+
+# Audio processing
+soundfile
+librosa
+scipy
+sphn==0.1.12
+auditok==0.2
+
+# ASR / annotation
+whisper-timestamped
+
+# LLM transcript generation
+litellm
+openai
+
+# Training utilities
+fire
+simple-parsing
+safetensors
+wandb
+tensorboard
+huggingface_hub
+
+# General
+numpy
+pyyaml
+tqdm
+jiwer
+submitit

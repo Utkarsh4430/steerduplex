@@ -16,8 +16,10 @@ lora:
   scaling: 2.0
   ft_embed: false
 
-first_codebook_weight_multiplier: 100.0
-text_padding_weight: 0.5
+# PersonaPlex guidelines: downweight non-semantic audio tokens by 0.02 (= 1/50),
+# downweight padded text tokens by 0.3
+first_codebook_weight_multiplier: 50.0
+text_padding_weight: 0.3
 
 duration_sec: 100
 batch_size: 4

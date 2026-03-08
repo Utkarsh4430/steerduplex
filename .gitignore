@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Data (generated, large, user-specific)
+src/data/transcripts/
+src/data/voice_assignments/
+src/data/tts_audio/
+src/data/assembled/
+src/data/formatted/
+src/data/external/
+src/data/voices/user/audio/
+
+# Training outputs
+src/runs/
+runs/
+*.pt
+*.safetensors
+*.ckpt
+
+# WandB
+wandb/
+
+# Logs
+*.log
+*.err
+
+# Audio files (except voice presets checked into repo)
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Temporary files
+*.tmp
+*.temp
+*.nfs*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+Thumbs.db

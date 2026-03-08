@@ -54,12 +54,7 @@ def build_alignments_with_system_prompt(
 
 
 def run_whisper_annotation(manifest_path: Path, lang: str = "en", whisper_model: str = "medium") -> bool:
-    annotate_script = Path(__file__).parent.parent / "vendor" / "moshi-finetune" / "annotate.py"
-    if not annotate_script.exists():
-        print(f"[WARN] annotate.py not found at {annotate_script}. Skipping Whisper.")
-        return False
-
-    cmd = [sys.executable, str(annotate_script), str(manifest_path), "--lang", lang, "--whisper_model", whisper_model, "--local"]
+    cmd = [sys.executable, "-m", "training.annotate", str(manifest_path), "--lang", lang, "--whisper_model", whisper_model, "--local"]
     print(f"Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -84,14 +79,17 @@ def format_single(wav_path: Path, meta_path: Path, output_dir: Path) -> dict | N
 
     alignments = build_alignments_with_system_prompt(metadata, whisper_alignments)
 
+    # text_conditions flows through to ConditionAttributes.text in moshi-finetune,
+    # which is how train.py reads prompt_end_sec for loss masking.
     transcript_data = {
         "alignments": alignments,
-        "text_conditions": None,
+        "text_conditions": {
+            "prompt_end_sec": str(metadata.get("prompt_end_sec", 0.0)),
+            "system_prompt": metadata.get("system_prompt", ""),
+        },
         "_metadata": {
             "category": metadata.get("category", ""),
             "data_type": metadata.get("data_type", "standard"),
-            "system_prompt": metadata.get("system_prompt", ""),
-            "prompt_end_sec": metadata.get("prompt_end_sec", 0.0),
             "assistant_voice_id": metadata.get("assistant_voice_id", ""),
         },
     }

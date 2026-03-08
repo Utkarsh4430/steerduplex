@@ -4,7 +4,6 @@
 set -euo pipefail
 
 ENV_NAME="steerduplex"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== Setting up SteerDuplex environment ==="
 
@@ -25,8 +24,9 @@ echo "=== Installing Qwen3-TTS ==="
 pip install -U qwen-tts
 pip install flash-attn --no-build-isolation 2>/dev/null || echo "WARN: flash-attn failed, using default attention"
 
-echo "=== Installing moshi-finetune ==="
-pip install -e "${SCRIPT_DIR}/vendor/moshi-finetune"
+echo "=== Installing moshi + moshi-finetune ==="
+pip install "moshi @ git+https://github.com/kyutai-labs/moshi.git#subdirectory=moshi"
+pip install "git+https://github.com/kyutai-labs/moshi-finetune.git"
 
 echo "=== Installing pipeline dependencies ==="
 pip install \
@@ -42,7 +42,12 @@ pip install \
     fire \
     huggingface_hub \
     wandb \
-    whisper-timestamped
+    whisper-timestamped \
+    sphn==0.1.12 \
+    auditok==0.2 \
+    safetensors \
+    simple-parsing \
+    submitit
 
 echo "=== Done ==="
 echo "Activate with: conda activate ${ENV_NAME}"

@@ -1,19 +1,14 @@
-"""System prompt loss masking for moshi-finetune.
+"""System prompt loss masking for SteerDuplex training.
 
-This module provides a patched loss function that masks out the
-system prompt region from the training loss. During the prompt
-region (voice prompt + system text), the model shouldn't be
-penalized for its predictions since those tokens are conditioning.
+Masks out the system prompt region (voice prompt + text prompt)
+from the training loss. Following PersonaPlex: "we mask out loss
+backpropagation to the system prompt."
 
-FOR FULL TRAINING ONLY — the pilot bakes prompts into audio and
-trains without masking, which is simpler but less optimal.
+Used by training/train.py which calls create_prompt_mask() and
+seconds_to_frames() each training step to build per-batch masks.
 
-To use: apply the patch in train.py before the training loop:
-    from training.loss_masking import patch_loss_for_prompt_masking
-    patch_loss_for_prompt_masking(args, data_loader)
-
-The patch works by modifying the loss mask to zero out positions
-in the prompt region (0 to prompt_end_sec for each sample).
+The mask zeros out loss for frames 0..prompt_end_sec, where
+prompt_end_sec is stored in each sample's JSON metadata.
 """
 
 import torch
