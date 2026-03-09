@@ -32,6 +32,7 @@ src/data/assembled/
 src/data/formatted/
 src/data/external/
 src/data/voices/user/audio/
+src/pipeline/voicepool/data/
 
 # Training outputs
 src/runs/
@@ -56,6 +57,7 @@ wandb/
 # Temporary files
 *.tmp
 *.temp
+.nfs*
 *.nfs*
 
 # Jupyter
@@ -63,3 +65,6 @@ wandb/
 
 # OS
 Thumbs.db
+
+# External tools
+src/pipeline/voicepool/sph2pipe_v2.5/
