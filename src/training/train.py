@@ -1,26 +1,29 @@
 """SteerDuplex training script.
 
-Adapted from moshi-finetune's train.py with integrated system prompt loss masking.
-Requires the `finetune` package (installed via pip from moshi-finetune).
-
-Key differences from upstream moshi-finetune:
+Adapted from moshi-finetune's train.py with PersonaPlex training methodology:
+- Full finetuning (no LoRA) following PersonaPlex
 - System prompt loss masking: zeros out loss in the voice_prompt + text_prompt region
-  (PersonaPlex: "we mask out loss backpropagation to the system prompt")
+- Separate learning rates: depth transformer (4e-6) and temporal transformer (2e-6)
+- Cosine annealing with linear warmup (PersonaPlex: "Adam with cosine annealing")
 - Token weighting follows PersonaPlex:
   - Non-semantic audio tokens downweighted by 0.02 (first_codebook_weight_multiplier=50)
   - Padded text tokens downweighted by 0.3
+- Checkpoint resume support
 
 Usage:
     # Via launch.sh (recommended)
-    bash training/launch.sh configs/pilot_training.yaml 8
+    bash training/launch.sh configs/full_training.yaml 8
 
     # Direct invocation
-    torchrun --nproc-per-node 8 -m training.train configs/pilot_training.yaml
+    torchrun --nproc-per-node 8 -m training.train configs/full_training.yaml
+
+    # Resume from checkpoint (set moshi_paths.moshi_path in config to checkpoint file)
+    bash training/launch.sh configs/full_training.yaml 8
 """
 
 import dataclasses
-import json
 import logging
+import math
 import os
 import pprint
 import shutil
@@ -28,9 +31,12 @@ from contextlib import ExitStack
 from pathlib import Path
 
 import fire
+import torch
 import torch.cuda
 import torch.distributed as dist
-from torch.optim import AdamW, lr_scheduler
+import yaml
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from finetune.args import TrainArgs
 from finetune.checkpointing import Checkpointer
@@ -44,7 +50,6 @@ from finetune.distributed import (
     is_torchrun,
     set_device,
 )
-from finetune.eval import evaluate
 from finetune.loss import compute_loss_with_mask
 from finetune.mixed_precision import (
     downcast_mixed_precision,
@@ -67,7 +72,6 @@ from training.loss_masking import create_prompt_mask, seconds_to_frames
 
 logger = logging.getLogger("train")
 
-# Mimi codec frame rate
 MIMI_FRAME_RATE = 12.5
 
 
@@ -76,12 +80,26 @@ def main_logger_info(message: str) -> None:
         logger.info(message)
 
 
+# ---------------------------------------------------------------------------
+# Custom config helpers
+# ---------------------------------------------------------------------------
+
+def _load_custom_config(config_path: str) -> dict:
+    """Load custom SteerDuplex config fields from the 'steerduplex' section."""
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get("steerduplex", {})
+
+
+# ---------------------------------------------------------------------------
+# System prompt loss masking
+# ---------------------------------------------------------------------------
+
 def _get_prompt_end_frames(batch) -> list[int]:
     """Extract prompt_end_sec from batch condition_attributes and convert to frame indices.
 
-    format_dataset.py stores prompt_end_sec in text_conditions, which flows through
-    moshi-finetune's data loader into ConditionAttributes.text. If not available,
-    returns zeros (no masking applied).
+    moshi-finetune's InterleavedTokenizer passes text_conditions as a raw dict
+    (not a ConditionAttributes object). This function handles both cases.
     """
     prompt_end_frames = []
     batch_size = batch.codes.shape[0]
@@ -89,8 +107,16 @@ def _get_prompt_end_frames(batch) -> list[int]:
     if batch.condition_attributes is not None:
         for attr in batch.condition_attributes:
             prompt_end_sec = 0.0
-            # text_conditions → ConditionAttributes.text (Dict[str, Optional[str]])
-            if hasattr(attr, 'text') and attr.text:
+            if isinstance(attr, dict):
+                # Raw dict from JSON — moshi-finetune passes text_conditions as dict
+                val = attr.get("prompt_end_sec")
+                if val is not None:
+                    try:
+                        prompt_end_sec = float(val)
+                    except (ValueError, TypeError):
+                        pass
+            elif hasattr(attr, 'text') and attr.text:
+                # ConditionAttributes object (future-proofing)
                 val = attr.text.get("prompt_end_sec")
                 if val is not None:
                     try:
@@ -104,18 +130,199 @@ def _get_prompt_end_frames(batch) -> list[int]:
     return prompt_end_frames
 
 
+def _apply_prompt_mask(batch, text_mask, audio_mask):
+    """Apply system prompt loss masking to text and audio masks.
+
+    Returns modified (text_mask, audio_mask) with prompt region zeroed out.
+    """
+    prompt_end_frames = _get_prompt_end_frames(batch)
+    seq_len = batch.codes.shape[-1]
+    prompt_mask = create_prompt_mask(
+        batch_size=batch.codes.shape[0],
+        seq_len=seq_len,
+        prompt_end_frames=prompt_end_frames,
+        device=batch.codes.device,
+    )
+
+    # Only apply if there are actual prompt regions to mask
+    if not prompt_mask.all():
+        if text_mask.dim() == 3:
+            pm_text = prompt_mask.unsqueeze(1).expand_as(text_mask)
+            text_mask = text_mask & pm_text
+        elif text_mask.dim() == 2:
+            pm_text = prompt_mask[:, :text_mask.shape[-1]]
+            text_mask = text_mask & pm_text
+
+        if audio_mask.dim() == 3:
+            pm_audio = prompt_mask.unsqueeze(1).expand_as(audio_mask)
+            audio_mask = audio_mask & pm_audio
+        elif audio_mask.dim() == 2:
+            pm_audio = prompt_mask[:, :audio_mask.shape[-1]]
+            audio_mask = audio_mask & pm_audio
+
+    return text_mask, audio_mask
+
+
+# ---------------------------------------------------------------------------
+# Optimizer param groups (PersonaPlex: separate LR for depth/temporal)
+# ---------------------------------------------------------------------------
+
+def _build_param_groups(model, temporal_lr: float, depth_lr: float, weight_decay: float):
+    """Build optimizer param groups with separate LR for temporal and depth transformers.
+
+    PersonaPlex: depth transformer LR = 4e-6, temporal transformer LR = 2e-6.
+    """
+    temporal_params = []
+    depth_params = []
+    other_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if "depformer" in name:
+            depth_params.append(param)
+        elif "transformer" in name:
+            temporal_params.append(param)
+        else:
+            other_params.append(param)
+
+    groups = []
+    if temporal_params:
+        groups.append({
+            "params": temporal_params,
+            "lr": temporal_lr,
+            "weight_decay": weight_decay,
+        })
+    if depth_params:
+        groups.append({
+            "params": depth_params,
+            "lr": depth_lr,
+            "weight_decay": weight_decay,
+        })
+    if other_params:
+        groups.append({
+            "params": other_params,
+            "lr": temporal_lr,
+            "weight_decay": weight_decay,
+        })
+
+    n_temporal = sum(p.numel() for p in temporal_params)
+    n_depth = sum(p.numel() for p in depth_params)
+    n_other = sum(p.numel() for p in other_params)
+    main_logger_info(
+        f"Param groups: temporal={n_temporal:,d} @ lr={temporal_lr}, "
+        f"depth={n_depth:,d} @ lr={depth_lr}, "
+        f"other={n_other:,d} @ lr={temporal_lr}"
+    )
+    return groups
+
+
+# ---------------------------------------------------------------------------
+# Evaluation with prompt masking
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def evaluate_with_prompt_mask(model, data_loader, state, args):
+    """Evaluate with system prompt loss masking applied (upstream eval ignores it)."""
+    model.eval()
+
+    total_loss = 0.0
+    num_samples = 0
+    max_samples = 40 // max(get_world_size(), 1)
+
+    for batch in data_loader:
+        if num_samples >= max_samples:
+            break
+
+        codes = batch.codes
+        condition_tensors = None
+        if batch.condition_attributes is not None and model.condition_provider is not None:
+            condition_tensors = model.condition_provider.prepare(batch.condition_attributes)
+
+        output = model(codes=codes, condition_tensors=condition_tensors)
+
+        text_mask, audio_mask = _apply_prompt_mask(batch, output.text_mask, output.mask)
+
+        text_loss = compute_loss_with_mask(
+            output.text_logits,
+            codes[:, :model.audio_offset],
+            text_mask,
+            mode="text",
+            text_padding_weight=args.text_padding_weight,
+            text_padding_ids={model.text_padding_token_id, model.end_of_text_padding_id},
+        )
+        audio_loss = compute_loss_with_mask(
+            output.logits,
+            codes[:, model.audio_offset:model.audio_offset + model.dep_q],
+            audio_mask,
+            mode="audio",
+            first_codebook_weight_multiplier=args.first_codebook_weight_multiplier,
+        )
+
+        total_loss += (text_loss + audio_loss).item()
+        num_samples += 1
+
+    avg_loss = total_loss / max(num_samples, 1)
+    avg_loss = avg_aggregate(avg_loss)
+
+    state.this_eval_loss = avg_loss
+    state.this_eval_perplexity = math.exp(avg_loss) if avg_loss < 20 else float("inf")
+
+    model.train()
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint resume
+# ---------------------------------------------------------------------------
+
+def _find_latest_checkpoint(run_dir: Path) -> Path | None:
+    """Find the latest checkpoint directory in run_dir."""
+    ckpt_dirs = sorted(
+        run_dir.glob("checkpoints/step_*"),
+        key=lambda p: int(p.name.split("_")[1]),
+    )
+    return ckpt_dirs[-1] if ckpt_dirs else None
+
+
+def _save_resume_state(run_dir: Path, step: int, scheduler):
+    """Save training state for resume (rank 0 only)."""
+    if get_rank() == 0:
+        torch.save(
+            {"step": step, "scheduler_state": scheduler.state_dict()},
+            run_dir / "resume_state.pt",
+        )
+
+
+def _load_resume_state(run_dir: Path) -> dict | None:
+    """Load training state for resume."""
+    path = run_dir / "resume_state.pt"
+    if path.exists():
+        return torch.load(path, map_location="cpu", weights_only=True)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main training
+# ---------------------------------------------------------------------------
+
 def train(config: str):
-    args: TrainArgs = TrainArgs.load(config, drop_extra_fields=False)
+    custom = _load_custom_config(config)
+    args: TrainArgs = TrainArgs.load(config, drop_extra_fields=True)
     set_logger(logging.INFO)
 
     with ExitStack() as exit_stack:
-        _train(args, exit_stack)
+        _train(args, custom, exit_stack)
     logger.info("Closed everything!")
 
 
-def _train(args: TrainArgs, exit_stack: ExitStack):
+def _train(args: TrainArgs, custom: dict, exit_stack: ExitStack):
     set_random_seed(args.seed)
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+
+    # Disable torch.compile/dynamo — causes triton race conditions in multi-GPU training
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True
+    torch._dynamo.disable()
 
     # Init NCCL
     if "LOCAL_RANK" in os.environ:
@@ -128,24 +335,37 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
             "This message should only be displayed when testing."
         )
 
-    # Init run dir
+    # Init run dir with resume detection
     main_logger_info(f"Run dir: {args.run_dir}")
     run_dir = Path(args.run_dir)
 
-    if is_torchrun():
-        if run_dir.exists() and not args.overwrite_run_dir:
-            raise RuntimeError(
-                f"Run dir {run_dir} already exists. "
-                f"Either rename `run_dir` or remove {run_dir}."
-            )
-        elif run_dir.exists():
+    resume_state = None
+    if run_dir.exists() and is_torchrun():
+        latest_ckpt = _find_latest_checkpoint(run_dir)
+        if latest_ckpt is not None:
+            resume_state = _load_resume_state(run_dir)
+            if resume_state:
+                main_logger_info(
+                    f"Resuming from step {resume_state['step']} "
+                    f"(checkpoint: {latest_ckpt})"
+                )
+            else:
+                main_logger_info(
+                    f"Found checkpoint {latest_ckpt} but no resume_state.pt. "
+                    f"Starting fresh — set moshi_paths.moshi_path to checkpoint "
+                    f"file for weight resume."
+                )
+        elif args.overwrite_run_dir:
             main_logger_info(f"Removing run dir {run_dir}...")
             shutil.rmtree(run_dir)
+    elif not run_dir.exists() and is_torchrun():
+        pass  # Fresh start
 
+    # Validate finetuning mode
     if args.full_finetuning:
         assert not args.lora.enable, "LoRA should not be enabled for full finetuning."
     else:
-        assert args.lora.enable, "LoRA should be enabled for partial finetuning"
+        assert args.lora.enable, "LoRA should be enabled for partial finetuning."
 
     dist.barrier()
     run_dir.mkdir(exist_ok=True, parents=True)
@@ -236,22 +456,39 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
     param_dtype = getattr(torch, args.param_dtype)
     optim_dtype = torch.float32
 
-    assert args.lora is not None, "`args.lora` should be set to a valid value."
+    # Optimizer with separate LR for depth/temporal (PersonaPlex)
+    depth_lr = custom.get("depth_lr", args.optim.lr * 2)
+    warmup_steps = custom.get("warmup_steps", max(1, int(args.max_steps * args.optim.pct_start)))
 
-    # Optimizer
-    optimizer = AdamW(
-        model.parameters(),
-        lr=args.optim.lr,
-        betas=(0.9, 0.95),
-        eps=1e-08,
-        weight_decay=args.optim.weight_decay,
+    main_logger_info(
+        f"PersonaPlex config: temporal_lr={args.optim.lr}, depth_lr={depth_lr}, "
+        f"warmup_steps={warmup_steps}, cosine_annealing to step {args.max_steps}"
     )
 
-    scheduler = lr_scheduler.OneCycleLR(
+    param_groups = _build_param_groups(
+        model,
+        temporal_lr=args.optim.lr,
+        depth_lr=depth_lr,
+        weight_decay=args.optim.weight_decay,
+    )
+    optimizer = AdamW(param_groups, betas=(0.9, 0.95), eps=1e-08)
+
+    # Cosine annealing with linear warmup (PersonaPlex)
+    warmup_scheduler = LinearLR(
         optimizer,
-        max_lr=args.optim.lr,
-        total_steps=args.max_steps,
-        pct_start=args.optim.pct_start,
+        start_factor=1e-3,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=args.max_steps - warmup_steps,
+        eta_min=1e-7,
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_steps],
     )
 
     state = TrainState(args.max_steps)
@@ -268,6 +505,16 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
             full_finetuning=args.full_finetuning,
         )
 
+    # Resume from checkpoint
+    if resume_state is not None:
+        start_step = resume_state["step"]
+        scheduler.load_state_dict(resume_state["scheduler_state"])
+        state.step = start_step
+        main_logger_info(
+            f"Resumed: step={start_step}, scheduler restored. "
+            f"Note: optimizer momentum rebuilt from scratch."
+        )
+
     prepare_mixed_precision(
         model.parameters(), param_dtype=param_dtype, optim_dtype=optim_dtype
     )
@@ -275,6 +522,14 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
     # Training loop
     model.train()
     torch.cuda.empty_cache()
+
+    # Log trainable parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    main_logger_info(
+        f"Total params: {total_params:,d}, "
+        f"Trainable: {trainable_params:,d} ({trainable_params / total_params * 100:.1f}%)"
+    )
 
     while state.step < args.max_steps:
         state.start_step()
@@ -291,47 +546,21 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
             codes = batch.codes
 
             condition_tensors = None
-            if batch.condition_attributes is not None:
+            if batch.condition_attributes is not None and model.condition_provider is not None:
                 condition_tensors = model.condition_provider.prepare(
                     batch.condition_attributes
                 )
 
-            # Build system prompt mask for this batch
-            prompt_end_frames = _get_prompt_end_frames(batch)
-            seq_len = codes.shape[-1]
-            prompt_mask = create_prompt_mask(
-                batch_size=codes.shape[0],
-                seq_len=seq_len,
-                prompt_end_frames=prompt_end_frames,
-                device=codes.device,
-            )
-
             output = model(codes=codes, condition_tensors=condition_tensors)
 
-            # Apply prompt mask to both text and audio loss masks
-            text_mask = output.text_mask
-            audio_mask = output.mask
-            if prompt_mask.any():
-                # Expand prompt_mask to match mask dimensions
-                # text_mask shape: [B, 1, T], audio_mask shape: [B, Q, T]
-                pm = prompt_mask
-                if text_mask.dim() == 3:
-                    pm_text = pm.unsqueeze(1).expand_as(text_mask)
-                    text_mask = text_mask & pm_text
-                elif text_mask.dim() == 2:
-                    pm_text = pm[:, :text_mask.shape[-1]]
-                    text_mask = text_mask & pm_text
-
-                if audio_mask.dim() == 3:
-                    pm_audio = pm.unsqueeze(1).expand_as(audio_mask)
-                    audio_mask = audio_mask & pm_audio
-                elif audio_mask.dim() == 2:
-                    pm_audio = pm[:, :audio_mask.shape[-1]]
-                    audio_mask = audio_mask & pm_audio
+            # Apply system prompt loss masking (PersonaPlex)
+            text_mask, audio_mask = _apply_prompt_mask(
+                batch, output.text_mask, output.mask
+            )
 
             text_loss = compute_loss_with_mask(
                 output.text_logits,
-                codes[:, : model.audio_offset],
+                codes[:, :model.audio_offset],
                 text_mask,
                 mode="text",
                 text_padding_weight=args.text_padding_weight,
@@ -342,7 +571,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
             )
             audio_loss = compute_loss_with_mask(
                 output.logits,
-                codes[:, model.audio_offset : model.audio_offset + model.dep_q],
+                codes[:, model.audio_offset:model.audio_offset + model.dep_q],
                 audio_mask,
                 mode="audio",
                 first_codebook_weight_multiplier=args.first_codebook_weight_multiplier,
@@ -364,8 +593,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         if args.num_microbatches > 1:
             loss /= args.num_microbatches
             for p in model.parameters():
-                if p.requires_grad:
-                    assert p.grad is not None
+                if p.requires_grad and p.grad is not None:
                     p.grad.div_(args.num_microbatches)
 
         upcast_mixed_precision(model.parameters(), optim_dtype=optim_dtype)
@@ -382,7 +610,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
         if args.do_eval and (
             (args.eval_freq > 0 and state.step % args.eval_freq == 0) or is_last_step
         ):
-            evaluate(model, eval_data_loader, state, args)
+            evaluate_with_prompt_mask(model, eval_data_loader, state, args)
 
             eval_logs = get_eval_logs(
                 state.step, avg_loss,
@@ -410,6 +638,7 @@ def _train(args: TrainArgs, exit_stack: ExitStack):
                 save_only_lora=not args.full_finetuning and args.save_adapters,
                 dtype=param_dtype,
             )
+            _save_resume_state(run_dir, state.step, scheduler)
 
     main_logger_info("done!")
 

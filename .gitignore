@@ -32,7 +32,15 @@ src/data/assembled/
 src/data/formatted/
 src/data/external/
 src/data/voices/user/audio/
+src/data/voices/user/pool.jsonl
+src/data/voices/user/libri_train_pool.json
+src/data/voicepool/
+src/data/tts_comparison/
 src/pipeline/voicepool/data/
+
+# Claim files (distributed coordination)
+.claims/
+.claims_*/
 
 # Training outputs
 src/runs/
@@ -53,6 +61,13 @@ wandb/
 *.mp3
 *.flac
 *.ogg
+*.tar
+*.tar.gz
+*.tar.bz2
+
+# Secrets
+.env
+.env.*
 
 # Temporary files
 *.tmp

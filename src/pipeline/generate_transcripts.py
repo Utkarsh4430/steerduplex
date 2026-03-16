@@ -65,8 +65,9 @@ Generate a realistic spoken conversation between a USER and an ASSISTANT.
 4. Each turn has `tts_instruct` describing HOW it should sound (for TTS synthesis).
 5. Assistant tts_instruct must match the style the user requested.
 6. User tts_instruct should be natural (casual, varied, realistic).
-7. Include natural speech: "um", "uh", "(laughs)", "(sighs)", "(pauses)".
+7. Include natural filler words: "um", "uh", "like", "you know", "I mean". Do NOT include non-spoken stage directions like (laughs), (sighs), (pauses) — only speakable words.
 8. Keep turns 1-4 sentences. Natural, not scripted.
+9. Assistant tts_instruct should be SHORT — max 3 comma-separated descriptors. Keep it subtle, e.g., "warm, steady pace" not "warm, gentle tone, soft delivery, caring inflection, heartfelt".
 
 ## Output: ONLY valid JSON, no markdown
 {{
@@ -93,8 +94,9 @@ Generate a spoken conversation where the USER changes the ASSISTANT's speaking s
 4. Changes PERSIST — the assistant keeps the new style for all subsequent turns.
 5. Mark steering turns with "is_steering": true and "steers": {{"dimension": "new_value"}}.
 6. After adaptation, mark assistant turns with "adapted_to": ["dimension:value", ...].
-7. Include tts_instruct for every turn.
+7. Include tts_instruct for every turn. Keep instruct SHORT — max 3 comma-separated descriptors.
 8. The assistant should acknowledge the style change briefly (not ignore it).
+9. Only speakable words in text — no stage directions like (laughs), (sighs), (pauses). Filler words like "um", "uh" are fine.
 
 ## Output: ONLY valid JSON, no markdown
 {{
@@ -121,6 +123,7 @@ Generate a SHORT spoken conversation (3-4 turns) that can be rendered in two dif
 2. Provide TWO sets of tts_instruct — one for style_a, one for style_b.
 3. ONLY the {diff_dimension} should differ between variants.
 4. Keep it 3-4 turns, simple topic.
+5. Only speakable words in text — no (laughs), (sighs), (pauses). Keep tts_instruct SHORT (max 3 descriptors).
 
 ## Output: ONLY valid JSON, no markdown
 {{
@@ -147,8 +150,8 @@ Generate a LONG spoken conversation (10-15 turns) testing multi-turn coherence.
 2. Include topic changes (at least 1-2).
 3. Reference proper nouns from earlier turns (test recall).
 4. The assistant must maintain its style/role consistently over many turns.
-5. Include natural speech patterns and some backchanneling.
-6. Each turn has tts_instruct.
+5. Include natural filler words ("um", "uh") but NO stage directions like (laughs), (sighs), (pauses).
+6. Each turn has tts_instruct — keep it SHORT, max 3 comma-separated descriptors.
 
 ## Output: ONLY valid JSON, no markdown
 {{
@@ -173,7 +176,8 @@ Generate a spoken conversation where the ASSISTANT must handle a difficult situa
 3. The assistant must handle it GRACEFULLY — not go silent, not give a robotic refusal.
 4. The assistant should: acknowledge, briefly explain the limit, offer an alternative or redirect.
 5. The conversation should feel NATURAL, not like a test.
-6. Each turn has tts_instruct.
+6. Each turn has tts_instruct — keep it SHORT, max 3 comma-separated descriptors.
+7. Only speakable words in text — no (laughs), (sighs), (pauses).
 
 ## Failure type guidance
 - clarification: user is unclear, assistant asks to repeat/clarify
@@ -523,6 +527,8 @@ def main():
     parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--num_conversations", type=int, default=None)
     parser.add_argument("--num_workers", type=int, default=None, help="Parallel LLM workers (default: from config)")
+    parser.add_argument("--scale", choices=["pilot", "full"], default="pilot",
+                        help="Use pilot_per_category or full_per_category counts")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -533,7 +539,7 @@ def main():
     global _client
     model = cfg["llm_model"]
     base_url = cfg.get("llm_base_url") or None
-    api_key = cfg.get("llm_api_key") or "unused"
+    api_key = cfg.get("llm_api_key") or None  # falls back to OPENAI_API_KEY env var
     _client = OpenAI(base_url=base_url, api_key=api_key)
 
     categories = load_all_categories(cfg["categories_dir"])
@@ -542,79 +548,82 @@ def main():
     if args.category:
         categories = {k: v for k, v in categories.items() if k == args.category}
 
-    pilot_counts = cfg.get("pilot_per_category", {})
+    counts_key = "full_per_category" if args.scale == "full" else "pilot_per_category"
+    count_map = cfg.get(counts_key, cfg.get("pilot_per_category", {}))
     dt_weights = cfg.get("data_type_weights", {"standard": 1.0})
     num_workers = args.num_workers or cfg.get("num_workers", 8)
 
+    # Distributed claiming: each slot index is a work item.
+    # Multiple nodes/processes can run this concurrently on shared FS.
+    from pipeline.distributed import is_done, release_claim, try_claim
+
     for cat_id, cat_data in sorted(categories.items()):
-        if isinstance(pilot_counts, dict):
-            num_target = args.num_conversations or pilot_counts.get(cat_id, 60)
+        if isinstance(count_map, dict):
+            num_target = args.num_conversations or count_map.get(cat_id, 60)
         else:
-            num_target = args.num_conversations or pilot_counts
+            num_target = args.num_conversations or count_map
 
         cat_dir = ensure_dir(output_dir / cat_id)
+        claims_dir = ensure_dir(Path(cfg["output_dir"]) / ".claims" / cat_id)
 
-        # Resume: count already generated
-        existing = sorted(cat_dir.glob("*.json"))
-        start_idx = len(existing)
-
-        if start_idx >= num_target:
-            print(f"[SKIP] {cat_id}: already have {start_idx}/{num_target}")
+        # Count what's already done
+        done_count = sum(1 for i in range(num_target) if is_done(cat_dir / f"{i:05d}.json"))
+        if done_count >= num_target:
+            print(f"[SKIP] {cat_id}: all {num_target} done")
             continue
 
-        remaining = num_target - start_idx
-        print(f"\n=== {cat_id}: generating {remaining} more (have {start_idx}/{num_target}) | workers={num_workers} ===")
+        remaining = num_target - done_count
+        print(f"\n=== {cat_id}: {remaining} remaining ({done_count}/{num_target} done) | workers={num_workers} ===")
 
-        generated = start_idx
+        # Build list of unclaimed, undone slot indices
+        slots = [i for i in range(num_target) if not is_done(cat_dir / f"{i:05d}.json")]
+        random.shuffle(slots)  # shuffle so different nodes don't race on the same end
+
+        generated = 0
         failed = 0
-        max_failures = remaining * 2  # give up after too many failures
 
-        # Use ThreadPoolExecutor for parallel LLM calls
+        def _claim_and_generate(slot_idx: int) -> tuple[int, dict | None]:
+            claim_path = claims_dir / f"{slot_idx:05d}.claim"
+            out_path = cat_dir / f"{slot_idx:05d}.json"
+            if is_done(out_path):
+                return slot_idx, "skip"
+            if not try_claim(claim_path):
+                return slot_idx, "skip"
+            try:
+                transcript = _worker(model, cat_id, cat_data, dt_weights, cfg)
+                if transcript is not None:
+                    transcript["id"] = f"{cat_id}_{slot_idx:05d}"
+                    save_json(transcript, out_path)
+                    release_claim(claim_path)  # cleanup
+                else:
+                    release_claim(claim_path)  # let another node retry
+                return slot_idx, transcript
+            except Exception as e:
+                release_claim(claim_path)
+                print(f"  [ERROR] slot {slot_idx}: {e}")
+                return slot_idx, None
+
         with ThreadPoolExecutor(max_workers=num_workers) as pool:
-            # Submit initial batch
-            futures = {}
-            batch_size = min(remaining, num_workers * 2)
-            for _ in range(batch_size):
-                fut = pool.submit(_worker, model, cat_id, cat_data, dt_weights, cfg)
-                futures[fut] = True
+            futures = {pool.submit(_claim_and_generate, s): s for s in slots}
 
-            while generated < num_target and failed < max_failures:
-                done_futures = []
-                for fut in as_completed(futures):
-                    done_futures.append(fut)
-                    try:
-                        transcript = fut.result()
-                    except Exception as e:
-                        print(f"  [ERROR] Worker exception: {e}")
-                        transcript = None
+            for fut in as_completed(futures):
+                try:
+                    slot_idx, result = fut.result()
+                except Exception as e:
+                    print(f"  [ERROR] Worker exception: {e}")
+                    failed += 1
+                    continue
 
-                    if transcript is not None:
-                        with _counter_lock:
-                            transcript["id"] = f"{cat_id}_{generated:05d}"
-                            save_json(transcript, cat_dir / f"{generated:05d}.json")
-                            generated += 1
-                            if generated % 10 == 0:
-                                print(f"  {generated}/{num_target} done")
-                    else:
-                        failed += 1
+                if result == "skip":
+                    continue
+                elif result is not None:
+                    generated += 1
+                    if generated % 50 == 0:
+                        print(f"  {cat_id}: {generated} generated so far")
+                else:
+                    failed += 1
 
-                    # Submit replacement if still need more
-                    if generated < num_target and failed < max_failures:
-                        new_fut = pool.submit(_worker, model, cat_id, cat_data, dt_weights, cfg)
-                        futures[new_fut] = True
-
-                    # Stop if target reached
-                    if generated >= num_target:
-                        break
-
-                # Remove completed futures
-                for fut in done_futures:
-                    futures.pop(fut, None)
-
-                if generated >= num_target:
-                    break
-
-        print(f"  Completed: {generated}/{num_target} (failed: {failed})")
+        print(f"  {cat_id}: generated {generated}, failed {failed}")
 
 
 if __name__ == "__main__":

@@ -88,7 +88,7 @@ categories:
       Conversations where user requests musical/rhythmic output.
       Include both achievable (rhythmic speech, limericks) and stretch goals (singing).
       For TTS: use Qwen3-TTS instruct to attempt musical quality.
-    tts_instruct: "rhythmic, melodic quality, varied pitch, musical delivery"
+    tts_instruct: "rhythmic, melodic, varied pitch"
     num_conversations: 150
 
   volume_control:
@@ -135,8 +135,8 @@ categories:
       Conversations where user is sarcastic. The KEY is that the user's TTS
       instruct must convey sarcasm (flat tone, exaggerated emphasis) AND the
       assistant must respond acknowledging the sarcasm, not taking it literally.
-    user_tts_instruct: "sarcastic, flat delivery, exaggerated emphasis on key words, eye-roll energy"
-    assistant_tts_instruct: "understanding, acknowledging the humor, warm, not defensive"
+    user_tts_instruct: "sarcastic, flat delivery, exaggerated emphasis"
+    assistant_tts_instruct: "understanding, warm, not defensive"
     num_conversations: 250
 
   emotional_tone_mismatch:
@@ -185,7 +185,7 @@ categories:
     generation_approach: >
       Conversations involving numbers. Include phone numbers, large numbers,
       decimals, ordinals, counting sequences, math results.
-    tts_instruct: "clear, deliberate, number-by-number when appropriate, careful pacing"
+    tts_instruct: "clear, deliberate, careful pacing"
     num_conversations: 150
 
   interruption_handling:
@@ -286,7 +286,7 @@ categories:
       Use Qwen3-TTS non-verbal capabilities or Dia TTS (which supports
       [laugh], [sigh] tags) to generate these. Embed in natural
       conversation context.
-    tts_instruct: "include natural non-verbal sounds, laughter, sighs, gasps where appropriate"
+    tts_instruct: "natural delivery"
     num_conversations: 100
 
   homophone_disambiguation:

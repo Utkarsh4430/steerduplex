@@ -1,19 +1,17 @@
 # SteerDuplex data generation config
 
-# Phase 1: Transcript generation via LiteLLM
-# LiteLLM supports 100+ providers: https://docs.litellm.ai/docs/providers
-# Model format: "provider/model" e.g. "openai/gpt-4o", "anthropic/claude-3-opus"
-# For self-hosted: set llm_base_url to your endpoint
+# Phase 1: Transcript generation via OpenAI-compatible API
+# Uses LiteLLM proxy at Scale with bedrock/qwen3-32b
 transcript:
-  llm_model: "Qwen/Qwen3-32B"  # model name as expected by your LiteLLM proxy
-  llm_base_url: ""  # LiteLLM proxy URL (e.g., "http://localhost:4000/v1")
-  llm_api_key: ""  # API key for LiteLLM proxy (or set OPENAI_API_KEY env var)
+  llm_model: "bedrock/qwen.qwen3-32b-v1:0"
+  llm_base_url: "https://litellm-proxy.ml-serving-internal.scale.com/v1"
+  llm_api_key: ""  # Set OPENAI_API_KEY env var or fill in here
   temperature: 0.9
   max_tokens: 4096
   turns_range: [4, 12]
   categories_dir: "../data_categories"
   output_dir: "data/transcripts"
-  num_workers: 8  # parallel LLM workers for transcript generation
+  num_workers: 64  # parallel LLM workers for transcript generation
   pilot_per_category:
     A1_customer_service: 60
     A2_qa_assistant: 60
@@ -25,6 +23,19 @@ transcript:
     A8_failure_cases: 20
     A9_dynamic_steering: 200
     A10_graceful_failure: 40
+  # Full training: ~66K conversations → ~1000 hours after quality filtering
+  # A9 gets 33% (core novelty: dynamic steering)
+  full_per_category:
+    A1_customer_service: 7000
+    A2_qa_assistant: 7000
+    A3_tone_controlled: 6000
+    A4_persona_controlled: 6000
+    A5_style_accent: 4000
+    A6_speed_length: 4000
+    A7_emotional_empathetic: 4000
+    A8_failure_cases: 2000
+    A9_dynamic_steering: 22000
+    A10_graceful_failure: 4000
   # Data type distribution (applied across categories)
   data_type_weights:
     standard: 0.50
@@ -47,7 +58,8 @@ tts:
   assistant_model_id: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
   # User turns: Base model (voice cloning, no instruct)
   user_model_id: "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
-  device: "cuda:0"
+  num_gpus: 8  # number of GPUs to use
+  workers_per_gpu: 8  # concurrent synthesis processes per GPU (~3.4GB each, 8x = ~27GB/GPU)
   output_dir: "data/tts_audio"
   max_retries: 3
   sample_rate: 24000  # target output rate
@@ -55,9 +67,17 @@ tts:
 # Phase 4: Channel assembly
 assembly:
   sample_rate: 24000
-  silence_range_ms: [200, 800]
+  silence_range_ms: [200, 800]  # fallback for same-role or unset gaps
+  # Role-aware gaps — train the model to respond fast
+  user_to_assistant_gap_ms: [100, 400]   # assistant response latency: quick (100-400ms)
+  assistant_to_user_gap_ms: [300, 1200]  # user think time: natural (300-1200ms)
   barge_in_prob: 0.05
   barge_in_overlap_ms: [100, 500]
+  barge_in_fade_ms: 150  # fade out assistant audio over 150ms when user barges in
+  # User silence: occasionally insert long pauses before user speaks
+  # Trains model to handle dead air without hallucinating or cutting off
+  user_silence_prob: 0.08  # 8% of assistant→user transitions get extended silence
+  user_silence_range_ms: [2000, 6000]  # 2-6 seconds of silence
   max_duration_sec: 100
   output_dir: "data/assembled"
   voice_prompt_duration_sec: 5.0

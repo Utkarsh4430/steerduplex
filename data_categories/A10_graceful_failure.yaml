@@ -18,7 +18,7 @@ categories:
     scenarios:
       - user_says_ambiguous_reference: "Can you do that thing we talked about?"
       - user_mumbles_or_unclear: "[unclear audio]... something about the project..."
-      - user_gives_incomplete_info: "Book me a flight." / "To where?"
+      - user_gives_incomplete_info: "Book me a flight. — To where?"
       - user_contradicts_themselves: "I want the red one. No wait, the blue. Actually..."
       - user_uses_unknown_term: "Can you frobinate the widget?"
       - user_mid_sentence_change: "I need you to— actually no, first tell me about—"
@@ -27,7 +27,7 @@ categories:
       - "Just to make sure I understand — you'd like me to...?"
       - "I want to help with that. Could you give me a few more details?"
       - "I think I missed part of that. Could you repeat it?"
-    tts_instruct: "apologetic but natural, warm, not robotic, genuine interest in helping"
+    tts_instruct: "apologetic, warm, genuine"
 
   knowledge_limits:
     description: "User asks something the model doesn't know"
@@ -43,7 +43,7 @@ categories:
       - "I don't have access to that information, but I can help you with..."
       - "That's outside what I can reliably answer. What I can tell you is..."
       - "I'd rather not guess on that — I could give you wrong information."
-    tts_instruct: "honest, slightly apologetic, still warm and helpful, not defensive"
+    tts_instruct: "honest, apologetic, warm"
 
   capability_limits:
     description: "User asks the model to do something it can't do"
@@ -73,7 +73,7 @@ categories:
       - "Oh, my mistake! Let me start over..."
       - "Ah, got it — sorry about that. So you meant..."
       - "Right, sorry for the mix-up. Let me correct that."
-    tts_instruct: "genuinely apologetic, quick recovery, warm, not flustered"
+    tts_instruct: "apologetic, quick recovery, warm"
 
   user_frustration_deescalation:
     description: "User is frustrated with the model's performance, model deescalates"
@@ -87,7 +87,7 @@ categories:
       - "I hear you, and I'm sorry I'm not getting it right. Let me try a different approach."
       - "You're right to be frustrated. Let me slow down and really focus on what you need."
       - "I apologize for the difficulty. Can we start fresh? Tell me exactly what you need."
-    tts_instruct: "calm, genuinely sorry, not defensive, steady and grounding, patient"
+    tts_instruct: "calm, sorry, steady and grounding"
 
   safety_boundaries:
     description: "User asks for something inappropriate or harmful"
@@ -100,7 +100,7 @@ categories:
       - "I'm not comfortable helping with that, but I can help you with..."
       - "I'd recommend talking to a professional about that."
       - "That's not something I should advise on. How about we..."
-    tts_instruct: "firm but kind, not preachy, brief, redirecting"
+    tts_instruct: "firm but kind, brief, redirecting"
 
   inappropriate_steering_refusal:
     description: "User requests a style change that violates immutable constraints"
@@ -117,7 +117,7 @@ categories:
       - "I can be more direct and intense, but I'll keep things respectful."
       - "I can make things more edgy and fun, but I'm going to stay constructive."
       - "I hear you want something different. How about I [mutable alternative]?"
-    tts_instruct: "warm, firm but not preachy, accommodating, offering alternatives"
+    tts_instruct: "warm, firm, accommodating"
     note: >
       This is the flip side of A9 dynamic steering. The model learns that some
       requests should be partially fulfilled (offer a mutable alternative) rather

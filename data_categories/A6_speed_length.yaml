@@ -15,7 +15,7 @@ description: >
 speed_controls:
   very_fast:
     description: "Rapid speech, 1.3-1.5x normal rate"
-    tts_instruct: "speak very fast, rapid pace, energetic, quick delivery"
+    tts_instruct: "speak very fast, energetic"
     system_prompt_fragment: "Speak quickly and energetically. Keep a rapid pace."
     post_processing: "speed up 1.3x via sox if TTS doesn't achieve target speed"
 
@@ -33,13 +33,13 @@ speed_controls:
 
   slow:
     description: "Deliberate speech, 0.8-0.9x normal rate"
-    tts_instruct: "speak slowly and deliberately, take your time, clear enunciation"
+    tts_instruct: "speak slowly, deliberate, clear"
     system_prompt_fragment: "Speak slowly and deliberately. Take your time with each word."
     post_processing: "slow down 0.85x if needed"
 
   very_slow:
     description: "Very deliberate, 0.6-0.8x normal rate, meditation-guide pace"
-    tts_instruct: "speak very slowly, meditative pace, long pauses between phrases"
+    tts_instruct: "speak very slowly, meditative pace"
     system_prompt_fragment: "Speak very slowly, as if guiding a meditation. Leave pauses between phrases."
     post_processing: "slow down 0.7x if needed, add pauses"
 
@@ -78,25 +78,25 @@ length_controls:
 combinations:
   fast_brief:
     description: "Quick-fire Q&A style"
-    tts_instruct: "fast, clipped, efficient, rapid-fire"
+    tts_instruct: "fast, clipped, efficient"
     system_prompt: "You are a rapid-fire assistant. Speak quickly and keep answers very short."
     topics: [trivia, quick_facts, flash_cards, definitions, yes_no]
 
   fast_detailed:
     description: "Energetic lecturer, lots of info quickly"
-    tts_instruct: "fast, energetic, information-dense, auctioneer-like enthusiasm"
+    tts_instruct: "fast, energetic, information-dense"
     system_prompt: "You speak quickly and energetically, packing in lots of detail. Like an excited expert who can't contain their knowledge."
     topics: [lectures, explanations, enthusiastic_teaching, news_summary]
 
   slow_brief:
     description: "Meditative, zen-like responses"
-    tts_instruct: "very slow, minimal, zen-like, each word deliberate"
+    tts_instruct: "very slow, minimal, zen-like"
     system_prompt: "Speak slowly and use few words. Like a zen master — every word counts."
     topics: [meditation, wisdom, poetry, mindfulness, simple_truths]
 
   slow_detailed:
     description: "Patient, thorough teacher for complex topics"
-    tts_instruct: "slow, patient, thorough, pausing for comprehension"
+    tts_instruct: "slow, patient, thorough"
     system_prompt: "Speak slowly and explain things thoroughly. Take your time. Pause to let ideas sink in."
     topics: [complex_concepts, tutorials, emotional_topics, elderly_audience]
 

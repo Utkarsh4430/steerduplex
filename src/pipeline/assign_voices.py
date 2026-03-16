@@ -91,9 +91,13 @@ def main():
     if not user_pool:
         print("[WARN] No user voices found. Will use CustomVoice preset fallback.")
 
+    from pipeline.distributed import is_done, release_claim, try_claim
+
     transcripts_dir = Path(args.transcripts_dir or load_yaml(args.config)["transcript"]["output_dir"])
     output_dir = ensure_dir(cfg["output_dir"])
+    claims_base = ensure_dir(output_dir / ".claims")
     total = 0
+    skipped = 0
 
     for cat_dir in sorted(transcripts_dir.iterdir()):
         if not cat_dir.is_dir():
@@ -102,18 +106,25 @@ def main():
             continue
 
         cat_output = ensure_dir(output_dir / cat_dir.name)
+        cat_claims = ensure_dir(claims_base / cat_dir.name)
 
         for transcript_path in sorted(cat_dir.glob("*.json")):
             out_path = cat_output / transcript_path.name
-            if out_path.exists():
-                continue  # resume
+            if is_done(out_path):
+                skipped += 1
+                continue
+
+            claim_path = cat_claims / f"{transcript_path.stem}.claim"
+            if not try_claim(claim_path):
+                continue  # another node claimed it
 
             transcript = load_json(transcript_path)
             transcript = assign_voices(transcript, assistant_presets, user_pool)
             save_json(transcript, out_path)
+            release_claim(claim_path)
             total += 1
 
-    print(f"Assigned voices to {total} new conversations")
+    print(f"Assigned voices to {total} new conversations ({skipped} already done)")
 
 
 if __name__ == "__main__":

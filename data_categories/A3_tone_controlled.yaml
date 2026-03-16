@@ -15,139 +15,139 @@ tones:
   negative:
     angry:
       description: "Irritated, short-tempered, sharp delivery"
-      tts_instruct: "angry tone, sharp and clipped delivery, slightly raised pitch, tense"
+      tts_instruct: "angry tone, sharp clipped delivery"
       suitable_topics: [debate, complaint_handling, confrontation]
     sad:
       description: "Melancholic, subdued, gentle sadness"
-      tts_instruct: "sad, subdued tone, slower pace, softer voice, occasional sighs"
+      tts_instruct: "sad, subdued tone, slower pace"
       suitable_topics: [consolation, loss, disappointment, nostalgia]
     fearful:
       description: "Anxious, worried, uncertain"
-      tts_instruct: "anxious, slightly trembling voice, hesitant, faster pace with pauses"
+      tts_instruct: "anxious, hesitant, faster pace"
       suitable_topics: [warning, scary_story, risk_discussion]
     sarcastic:
       description: "Dry humor, ironic, deadpan"
-      tts_instruct: "dry sarcasm, deadpan delivery, exaggerated flat tone, subtle emphasis"
+      tts_instruct: "dry sarcasm, deadpan delivery"
       suitable_topics: [advice, commentary, critique, humor]
     dismissive:
       description: "Uninterested, curt, minimally engaged"
-      tts_instruct: "dismissive, flat tone, quick delivery, minimal enthusiasm"
+      tts_instruct: "dismissive, flat tone, quick delivery"
       suitable_topics: [unwanted_questions, repeated_requests]
     bitter:
       description: "Resentful, sharp undertone"
-      tts_instruct: "bitter undertone, controlled anger, tight delivery, measured but tense"
+      tts_instruct: "bitter, controlled anger, tight delivery"
       suitable_topics: [past_events, unfairness, regret]
     anxious:
       description: "Nervous, overthinking, rapid"
-      tts_instruct: "nervous, slightly faster pace, higher pitch, occasional stumbles"
+      tts_instruct: "nervous, faster pace, higher pitch"
       suitable_topics: [planning, uncertainty, decisions]
     frustrated:
       description: "Exasperated, at wit's end"
-      tts_instruct: "frustrated, exasperated sighs, strained patience, uneven pace"
+      tts_instruct: "frustrated, strained patience, uneven pace"
       suitable_topics: [troubleshooting, repeated_issues, misunderstandings]
     melancholic:
       description: "Wistful, reflective sadness"
-      tts_instruct: "wistful, reflective, soft and slow, gentle melancholy"
+      tts_instruct: "wistful, reflective, soft and slow"
       suitable_topics: [memories, change, passage_of_time]
     disappointed:
       description: "Let down, deflated"
-      tts_instruct: "disappointed, deflated tone, dropping pitch, subdued energy"
+      tts_instruct: "disappointed, deflated tone, subdued energy"
       suitable_topics: [expectations, results, feedback]
     stern:
       description: "Firm, no-nonsense, authoritative"
-      tts_instruct: "stern, firm delivery, lower pitch, deliberate and commanding"
+      tts_instruct: "stern, firm delivery, lower pitch"
       suitable_topics: [rules, warnings, discipline, boundaries]
     impatient:
       description: "Hurried, wanting to move on"
-      tts_instruct: "impatient, faster pace, slight edge, clipped sentences"
+      tts_instruct: "impatient, faster pace, clipped"
       suitable_topics: [repetitive_questions, slow_progress]
     condescending:
       description: "Talking down, patronizing"
-      tts_instruct: "condescending, overly slow and clear, patronizing sweetness"
+      tts_instruct: "condescending, overly slow, patronizing"
       suitable_topics: [explanation, correction]
     passive_aggressive:
       description: "Superficially pleasant, underlying hostility"
-      tts_instruct: "sweet on surface, subtle edge underneath, overly polite, pointed"
+      tts_instruct: "overly polite, subtle edge underneath"
       suitable_topics: [workplace, social_situations]
     skeptical:
       description: "Doubting, questioning everything"
-      tts_instruct: "skeptical, questioning intonation, raised eyebrows in voice, measured"
+      tts_instruct: "skeptical, questioning intonation, measured"
       suitable_topics: [claims, proposals, explanations]
 
   neutral:
     matter_of_fact:
       description: "Plain, informational, no emotional coloring"
-      tts_instruct: "neutral, matter-of-fact, even pace, no emotional emphasis"
+      tts_instruct: "neutral, matter-of-fact, even pace"
       suitable_topics: [any]
     deadpan:
       description: "Completely flat, intentionally emotionless"
-      tts_instruct: "completely flat delivery, monotone, no inflection, robotic"
+      tts_instruct: "flat monotone, no inflection"
       suitable_topics: [humor, dry_comedy, factual_reporting]
 
   positive:
     cheerful:
       description: "Happy, upbeat, bright"
-      tts_instruct: "cheerful, bright tone, smiling voice, upbeat pace"
+      tts_instruct: "cheerful, bright tone, upbeat pace"
       suitable_topics: [greetings, good_news, casual_chat]
     enthusiastic:
       description: "Excited, energetic, passionate"
-      tts_instruct: "enthusiastic, energetic, varied pitch, faster pace, genuine excitement"
+      tts_instruct: "enthusiastic, energetic, faster pace"
       suitable_topics: [new_ideas, discoveries, hobbies, recommendations]
     warm:
       description: "Caring, gentle, inviting"
-      tts_instruct: "warm, gentle tone, soft delivery, caring inflection"
+      tts_instruct: "warm, gentle tone, soft delivery"
       suitable_topics: [support, welcome, comfort, advice]
     encouraging:
       description: "Supportive, motivating, uplifting"
-      tts_instruct: "encouraging, uplifting tone, confident and warm, building energy"
+      tts_instruct: "encouraging, uplifting, confident"
       suitable_topics: [coaching, learning, challenges, goals]
     playful:
       description: "Teasing, light, fun"
-      tts_instruct: "playful, light and bouncy, teasing delivery, fun energy"
+      tts_instruct: "playful, light and bouncy, teasing"
       suitable_topics: [jokes, games, casual_banter, trivia]
     calm:
       description: "Serene, peaceful, soothing"
-      tts_instruct: "calm, serene, slow pace, soft and steady, soothing delivery"
+      tts_instruct: "calm, serene, slow pace"
       suitable_topics: [meditation, relaxation, bedtime, stress_relief]
     confident:
       description: "Self-assured, authoritative but not aggressive"
-      tts_instruct: "confident, steady pace, clear articulation, assured delivery"
+      tts_instruct: "confident, steady pace, assured"
       suitable_topics: [advice, expertise, leadership, decisions]
     empathetic:
       description: "Understanding, emotionally attuned, validating"
-      tts_instruct: "empathetic, understanding tone, gentle pace, emotionally present"
+      tts_instruct: "empathetic, understanding tone, gentle pace"
       suitable_topics: [emotional_support, listening, counseling]
     grateful:
       description: "Appreciative, thankful, touched"
-      tts_instruct: "grateful, sincere warmth, slightly slower, heartfelt delivery"
+      tts_instruct: "grateful, sincere warmth, slightly slower"
       suitable_topics: [thank_you, recognition, appreciation]
     proud:
       description: "Accomplished, beaming, satisfied"
-      tts_instruct: "proud, beaming tone, chest-voice warmth, measured and satisfied"
+      tts_instruct: "proud, warm tone, measured"
       suitable_topics: [achievements, milestones, accomplishments]
     gentle:
       description: "Soft, careful, tender"
-      tts_instruct: "gentle, very soft delivery, careful words, tender and quiet"
+      tts_instruct: "gentle, very soft, tender"
       suitable_topics: [sensitive_topics, children, comfort, healing]
     humorous:
       description: "Funny, witty, comedic timing"
-      tts_instruct: "humorous, comedic timing, varied pace, playful emphasis, occasional chuckle"
+      tts_instruct: "humorous, comedic timing, playful"
       suitable_topics: [jokes, stories, commentary, entertainment]
     wise:
       description: "Sage-like, measured, profound"
-      tts_instruct: "wise, measured pace, deeper tone, thoughtful pauses, gravitas"
+      tts_instruct: "wise, measured pace, deeper tone"
       suitable_topics: [life_advice, philosophy, mentoring, reflection]
     excited:
       description: "High energy, can barely contain it"
-      tts_instruct: "very excited, higher pitch, fast pace, breathless enthusiasm"
+      tts_instruct: "excited, higher pitch, fast pace"
       suitable_topics: [surprises, celebrations, breaking_news, discoveries]
     sympathetic:
       description: "Feeling for someone, compassionate"
-      tts_instruct: "sympathetic, soft and compassionate, slightly lower tone, attentive"
+      tts_instruct: "sympathetic, soft, slightly lower tone"
       suitable_topics: [bad_news, struggles, empathy]
     friendly:
       description: "Approachable, casual warmth, neighborly"
-      tts_instruct: "friendly, casual warmth, relaxed pace, approachable and easy"
+      tts_instruct: "friendly, casual warmth, relaxed pace"
       suitable_topics: [introductions, casual_chat, recommendations, small_talk]
 
 conversation_structure:

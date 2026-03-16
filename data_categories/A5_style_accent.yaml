@@ -13,91 +13,91 @@ description: >
 speaking_styles:
   formal:
     description: "Proper grammar, no contractions, structured sentences"
-    tts_instruct: "formal, proper, no contractions, structured delivery, refined"
+    tts_instruct: "formal, proper, structured"
     example_system_prompt: "Speak in a highly formal manner. Use proper grammar, avoid contractions, and maintain a dignified tone."
     suitable_topics: [business, diplomacy, academic, legal, ceremonies]
 
   casual:
     description: "Relaxed, contractions, colloquialisms, friendly"
-    tts_instruct: "casual, relaxed, natural contractions, friendly and easy"
+    tts_instruct: "casual, relaxed, friendly"
     example_system_prompt: "Keep it casual and conversational. Talk like you're chatting with a friend."
     suitable_topics: [daily_life, hobbies, recommendations, stories, chat]
 
   poetic:
     description: "Lyrical, metaphorical, rhythmic phrasing"
-    tts_instruct: "lyrical, flowing rhythm, emphasis on beautiful phrasing, poetic cadence"
+    tts_instruct: "lyrical, flowing rhythm, poetic"
     example_system_prompt: "Speak poetically. Use metaphors, lyrical phrasing, and rhythmic language."
     suitable_topics: [nature, love, beauty, philosophy, art, emotions]
 
   pirate_speak:
     description: "Arrr, matey! Nautical terms, ye/yer, swashbuckling vocabulary"
-    tts_instruct: "rough, hearty, pirate cadence, boisterous, rolling r's"
+    tts_instruct: "rough, hearty, pirate cadence"
     example_system_prompt: "Talk like a pirate. Use 'arr', 'matey', 'ye', nautical terms."
     suitable_topics: [any_reframed_as_adventure, treasure, sea, quests]
 
   old_english:
     description: "Thee, thou, prithee, archaic vocabulary"
-    tts_instruct: "theatrical, archaic rhythm, dramatic pauses, grand delivery"
+    tts_instruct: "theatrical, archaic rhythm, grand"
     example_system_prompt: "Speak in old English style. Use thee, thou, prithee, and archaic sentence structures."
     suitable_topics: [any, especially_dramatic_topics]
 
   valley_girl:
     description: "Like, totally, upspeak, vocal fry, California casual"
-    tts_instruct: "upspeak, rising intonation at end of sentences, casual, valley girl cadence"
+    tts_instruct: "upspeak, rising intonation, casual"
     example_system_prompt: "Talk in a Valley Girl style. Use 'like', 'totally', 'oh my god', upspeak."
     suitable_topics: [shopping, social, gossip, opinions, fashion]
 
   military:
     description: "Concise, hierarchical, acronyms, mission-oriented"
-    tts_instruct: "clipped, efficient, military precision, no wasted words, commanding"
+    tts_instruct: "clipped, efficient, military precision"
     example_system_prompt: "Speak with military precision. Be concise, use military terminology, stay mission-focused."
     suitable_topics: [planning, execution, reports, discipline, strategy]
 
   academic:
     description: "Scholarly, citations, hedging, nuanced"
-    tts_instruct: "scholarly, measured, hedging language, nuanced delivery, intellectual"
+    tts_instruct: "scholarly, measured, nuanced"
     example_system_prompt: "Speak in an academic register. Use precise terminology, hedge claims appropriately, cite frameworks."
     suitable_topics: [research, theories, analysis, methodology, debate]
 
   storytelling:
     description: "Narrative flow, building tension, vivid descriptions"
-    tts_instruct: "narrative flow, building tension, vivid, varied pace for dramatic effect"
+    tts_instruct: "narrative flow, building tension, vivid"
     example_system_prompt: "Tell everything as a story. Build narrative, use vivid descriptions, create tension and resolution."
     suitable_topics: [any_topic_as_narrative, history, experiences, explanations]
 
   minimalist:
     description: "Extremely brief, telegraphic, essential words only"
-    tts_instruct: "brief, minimal, pauses between short phrases, no filler"
+    tts_instruct: "brief, minimal, pauses between phrases"
     example_system_prompt: "Be extremely concise. Use as few words as possible. Telegraphic style."
     suitable_topics: [facts, directions, answers, definitions]
 
   verbose:
     description: "Elaborate, detailed, tangential, never uses one word where ten will do"
-    tts_instruct: "elaborate, flowing, detailed, tangential asides, never stopping"
+    tts_instruct: "elaborate, flowing, tangential"
     example_system_prompt: "Be extremely verbose and detailed. Elaborate on everything, add context, tangents, and rich description."
     suitable_topics: [explanations, descriptions, stories, opinions]
 
   socratic:
     description: "Answers questions with questions, guides discovery"
-    tts_instruct: "questioning intonation, thoughtful, guiding, patient, Socratic rhythm"
+    tts_instruct: "questioning, thoughtful, guiding"
     example_system_prompt: "Use the Socratic method. Instead of giving direct answers, guide through questions. Help the user discover answers themselves."
     suitable_topics: [learning, philosophy, problem_solving, ethics]
 
   news_anchor:
     description: "Professional broadcast style, clear diction, authoritative"
-    tts_instruct: "broadcast professional, clear diction, authoritative, measured pace, anchor delivery"
+    tts_instruct: "broadcast professional, clear diction, authoritative"
     example_system_prompt: "Speak like a professional news anchor. Clear, authoritative, well-paced delivery."
     suitable_topics: [news, reports, summaries, analysis, current_events]
 
   whispered:
     description: "Quiet, intimate, secretive"
-    tts_instruct: "whispered, quiet, intimate, secretive delivery, soft and close"
+    tts_instruct: "whispered, quiet, intimate"
     example_system_prompt: "Speak in a whisper. Keep your voice very quiet, intimate, as if sharing a secret."
     suitable_topics: [secrets, bedtime, library, intimate_conversation]
 
   sports_commentator:
     description: "Play-by-play energy, building excitement, dramatic"
-    tts_instruct: "play-by-play energy, building excitement, dramatic peaks, fast-paced"
+    tts_instruct: "play-by-play energy, building excitement, fast"
     example_system_prompt: "Speak like a sports commentator. Build excitement, use play-by-play style, dramatic moments."
     suitable_topics: [any_reframed_as_sports_event, competition, action, highlights]
 
@@ -114,17 +114,17 @@ accents:
 
   southern_american:
     description: "American South, drawl, warm, unhurried"
-    tts_instruct: "Southern American accent, warm drawl, unhurried, y'all"
+    tts_instruct: "Southern American accent, warm drawl"
     voice_source_preference: "CommonAccent American Southern speakers"
 
   new_york:
     description: "NYC accent, fast-paced, distinctive vowels"
-    tts_instruct: "New York accent, fast-paced, distinctive vowels, direct"
+    tts_instruct: "New York accent, fast-paced, direct"
     voice_source_preference: "CommonAccent NYC speakers"
 
   australian:
     description: "Australian accent, casual, rising intonation"
-    tts_instruct: "Australian accent, casual, rising intonation, relaxed"
+    tts_instruct: "Australian accent, casual, relaxed"
     voice_source_preference: "CommonAccent Australian speakers"
 
   scottish:
@@ -134,7 +134,7 @@ accents:
 
   irish:
     description: "Irish accent, melodic, lilting quality"
-    tts_instruct: "Irish accent, melodic, lilting quality, warm"
+    tts_instruct: "Irish accent, melodic, warm"
     voice_source_preference: "CommonAccent Irish speakers"
 
   indian:
@@ -149,7 +149,7 @@ accents:
 
   german_english:
     description: "German-accented English, precise, structured"
-    tts_instruct: "German-accented English, precise, structured, crisp consonants"
+    tts_instruct: "German-accented English, precise, crisp"
     voice_source_preference: "CommonAccent German English speakers"
 
   japanese_english:
@@ -159,17 +159,17 @@ accents:
 
   spanish_english:
     description: "Spanish-accented English, warm, rolled r's"
-    tts_instruct: "Spanish-accented English, warm, melodic, rolled r's"
+    tts_instruct: "Spanish-accented English, warm, melodic"
     voice_source_preference: "CommonAccent Spanish English speakers"
 
   texan:
     description: "Texas accent, big personality, distinctive twang"
-    tts_instruct: "Texan accent, distinctive twang, big personality, confident"
+    tts_instruct: "Texan accent, distinctive twang, confident"
     voice_source_preference: "CommonAccent Texan speakers"
 
   midwestern:
     description: "American Midwest, friendly, oh-ya, don'tcha know"
-    tts_instruct: "Midwestern accent, friendly, rounded vowels, polite"
+    tts_instruct: "Midwestern accent, friendly, polite"
     voice_source_preference: "CommonAccent Midwestern speakers"
 
   boston:

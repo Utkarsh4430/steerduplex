@@ -59,6 +59,10 @@ def main():
     parser.add_argument("--category", type=str, default=None)
     parser.add_argument("--skip_whisper", action="store_true")
     parser.add_argument("--skip_quality", action="store_true", help="Skip quality filter between TTS and assembly")
+    parser.add_argument("--num_gpus", type=int, default=None, help="GPUs for TTS synthesis (default: all available)")
+    parser.add_argument("--workers_per_gpu", type=int, default=None, help="Concurrent TTS workers per GPU (default: 4)")
+    parser.add_argument("--scale", choices=["pilot", "full"], default="pilot",
+                        help="Use pilot or full training conversation counts")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -81,6 +85,13 @@ def main():
 
         name, module = PHASES[phase]
         extra = ["--seed", str(args.seed)]
+        if phase == 1:
+            extra.extend(["--scale", args.scale])
+        if phase == 3:
+            if args.num_gpus:
+                extra.extend(["--num_gpus", str(args.num_gpus)])
+            if args.workers_per_gpu:
+                extra.extend(["--workers_per_gpu", str(args.workers_per_gpu)])
         if phase == 5 and args.skip_whisper:
             extra.append("--skip_whisper")
 
@@ -90,7 +101,12 @@ def main():
         # Run quality filter after TTS (phase 3), before assembly (phase 4)
         if phase == 3 and not args.skip_quality and 4 in phases:
             qf_name, qf_module = OPTIONAL_PHASES["quality_filter"]
-            run_phase(qf_name, qf_module, args.config, args.category)
+            qf_extra = []
+            if args.num_gpus:
+                qf_extra.extend(["--num_gpus", str(args.num_gpus)])
+            if args.workers_per_gpu:
+                qf_extra.extend(["--workers_per_gpu", str(args.workers_per_gpu)])
+            run_phase(qf_name, qf_module, args.config, args.category, qf_extra)
 
     print(f"\n{'=' * 60}")
     print(f"  Pipeline complete!")
