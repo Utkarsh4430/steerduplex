@@ -3,6 +3,10 @@
 Called automatically by launch.sh before training starts.
 Can also be run standalone to preview what will be merged.
 
+Audio paths in each source manifest are relative to that manifest's directory.
+When merging into a combined manifest at a different location, paths are
+rewritten to be relative to the combined manifest's parent directory.
+
 Standard dataset format:
     data/external/{name}/manifest.jsonl
     data/formatted/manifest_train.jsonl  (synthetic)
@@ -14,10 +18,39 @@ Usage:
 
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
 from pipeline.utils import load_yaml
+
+
+def _rebase_paths(entries: list[dict], src_manifest: Path, dst_manifest: Path) -> list[dict]:
+    """Rewrite relative audio paths so they resolve correctly from dst_manifest's directory.
+
+    sphn.dataset_jsonl resolves paths relative to the JSONL file's parent directory.
+    When merging manifests from different locations, we need to adjust paths.
+    """
+    src_dir = src_manifest.parent.resolve()
+    dst_dir = dst_manifest.parent.resolve()
+
+    if src_dir == dst_dir:
+        return entries
+
+    rebased = []
+    for entry in entries:
+        entry = dict(entry)  # shallow copy
+        if "path" in entry:
+            # Resolve the absolute path from the source manifest
+            abs_path = src_dir / entry["path"]
+            # Make it relative to the destination manifest directory
+            try:
+                entry["path"] = os.path.relpath(abs_path, dst_dir)
+            except ValueError:
+                # Different drives on Windows — use absolute path
+                entry["path"] = str(abs_path)
+        rebased.append(entry)
+    return rebased
 
 
 def load_manifest(path: Path, max_hours: float | None = None, seed: int = 42) -> list[dict]:
@@ -87,6 +120,8 @@ def merge(config_path: str, dry_run: bool = False, seed: int = 42) -> dict:  # n
             status = "MISSING"
         else:
             status = "ON"
+            # Rebase paths relative to the output manifest location
+            entries = _rebase_paths(entries, train_path, out_train)
             all_train.extend(entries)
 
         stats[name] = {"entries": len(entries), "hours": round(hours, 1), "enabled": True}
@@ -95,7 +130,9 @@ def merge(config_path: str, dry_run: bool = False, seed: int = 42) -> dict:  # n
         # Eval manifest (optional)
         eval_path_str = ds.get("manifest_eval")
         if eval_path_str:
-            eval_entries = load_manifest(Path(eval_path_str))
+            eval_path = Path(eval_path_str)
+            eval_entries = load_manifest(eval_path)
+            eval_entries = _rebase_paths(eval_entries, eval_path, out_eval)
             all_eval.extend(eval_entries)
 
     total_hours = sum(s["hours"] for s in stats.values())

@@ -82,7 +82,7 @@ text_padding_weight: 0.3
 # PersonaPlex: 2048 tokens at 12.5Hz = 163.84s
 duration_sec: 163.84
 
-batch_size: 4              # per GPU → 32 effective on 8 GPUs (matches PersonaPlex)
+batch_size: 8              # per GPU → 32 effective on 8 GPUs (matches PersonaPlex)
 max_steps: 35000           # ~15 epochs over 3447h of data
 num_microbatches: 1
 gradient_checkpointing: true
