@@ -1,44 +1,24 @@
 """Offline inference for SteerDuplex.
 
-Generates assistant audio responses given:
-- A system prompt (text)
-- An assistant voice (voice prompt WAV or preset name)
-- User audio input (WAV file)
-- Optional: a finetuned checkpoint (LoRA or full)
-
-Based on the Moshi streaming architecture with system prompt injection
-following the PersonaPlex pattern: voice_prompt → silence → text_prompt → silence → conversation.
+Uses custom LMGen (ported from PersonaPlex) with:
+  - Native 4-phase prompt injection via `provided` tensor
+  - Dual Mimi (streaming state isolation)
+  - Correct text sampling (temp_text=0.7, top_k_text=25)
+  - Voice prompt LUFS normalization (-24 LUFS)
+  - Voice prompt embedding save/replay
+  - Greedy decoding support
+  - Reproducibility seeding
 
 Usage:
-    # Basic inference with base model
-    python -m inference.generate \
-        --user_audio input.wav \
-        --output output.wav \
-        --system_prompt "You are a helpful assistant."
-
-    # With finetuned checkpoint
-    python -m inference.generate \
-        --user_audio input.wav \
-        --output output.wav \
-        --system_prompt "You are a helpful assistant." \
-        --checkpoint runs/pilot_v1/checkpoint_3000
-
-    # With voice prompt
-    python -m inference.generate \
-        --user_audio input.wav \
-        --output output.wav \
-        --system_prompt "You are a helpful assistant." \
-        --voice_prompt data/voices/assistant/audio/ryan_ref.wav
-
-    # Interactive mode (microphone)
-    python -m inference.generate --interactive \
-        --system_prompt "You are a friendly tutor." \
-        --voice_prompt data/voices/assistant/audio/vivian_ref.wav
+    python -m inference.generate --user_audio input.wav --output output.wav
+    python -m inference.generate --user_audio input.wav --output output.wav \
+        --checkpoint runs/full_v3_.../checkpoint_005000/consolidated
 """
 
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -46,78 +26,105 @@ import numpy as np
 import torch
 import sphn
 
+# Disable Triton compilation
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+# Add libcuda path
+_lib_path = os.environ.get("LIBRARY_PATH", "")
+if "/usr/lib/x86_64-linux-gnu" not in _lib_path:
+    os.environ["LIBRARY_PATH"] = f"/usr/lib/x86_64-linux-gnu:{_lib_path}".rstrip(":")
+
 from moshi.models import loaders
+from safetensors.torch import load_file
 
 logger = logging.getLogger(__name__)
 
+N_MIMI_CODEBOOKS = 8
+
 
 def wrap_with_system_tags(text: str) -> str:
-    """Wrap text with <system> tags for Moshi conditioning."""
     cleaned = text.strip()
     if cleaned.startswith("<system>") and cleaned.endswith("<system>"):
         return cleaned
     return f"<system> {cleaned} <system>"
 
 
-def load_audio(path: str, sample_rate: int) -> torch.Tensor:
-    """Load audio file and return as tensor (1, T)."""
-    audio, sr = sphn.read(path)
-    audio = torch.from_numpy(audio)
-    if audio.ndim == 1:
-        audio = audio.unsqueeze(0)
-    if audio.shape[0] > 1:
-        audio = audio[0:1]  # mono
-    if sr != sample_rate:
-        import torchaudio.functional as F
-        audio = F.resample(audio, sr, sample_rate)
-    return audio
-
-
-def normalize_audio(audio: torch.Tensor, sample_rate: int, target_lufs: float = -24.0) -> torch.Tensor:
-    """Normalize audio to target LUFS (simplified loudness normalization)."""
-    rms = audio.pow(2).mean().sqrt()
-    if rms > 0:
-        # Approximate LUFS normalization via RMS scaling
-        target_rms = 10 ** (target_lufs / 20)
-        audio = audio * (target_rms / rms)
-    return audio
-
-
 class MoshiInference:
-    """Moshi model wrapper for offline inference with system prompt support."""
+    """Moshi model wrapper with PersonaPlex-compatible inference."""
 
     def __init__(
         self,
         hf_repo_id: str = "kyutai/moshiko-pytorch-bf16",
         checkpoint_path: str | None = None,
         device: str = "cuda",
+        seed: int | None = None,
+        greedy: bool = False,
+        save_voice_prompt_embeddings: bool = False,
     ):
         self.device = torch.device(device)
 
-        # Load model components
-        logger.info("Loading Moshi from %s", hf_repo_id)
-        self.checkpoint_info = loaders.CheckpointInfo.from_hf_repo(
-            hf_repo=hf_repo_id,
-        )
+        # Set default CUDA device — CUDA graphs require capture on the
+        # correct device. This persists for all subsequent operations.
+        if self.device.type == "cuda":
+            torch.cuda.set_device(self.device)
 
-        # Load Mimi codec
-        logger.info("Loading Mimi codec...")
-        self.mimi = self.checkpoint_info.get_mimi(device=device)
-        self.mimi.eval()
-        self.sample_rate = self.mimi.sample_rate
+        # Reproducibility
+        if seed is not None and seed >= 0:
+            from inference.lm_gen import seed_all
+            seed_all(seed)
 
-        # Load text tokenizer
-        self.spm = self.checkpoint_info.get_text_tokenizer()
+        # CUDA graphs require correct device context during capture.
+        # Wrapping all init + warmup in torch.cuda.device() ensures
+        # graph capture happens on the right GPU.
+        with torch.cuda.device(self.device):
+            logger.info("Loading Moshi from %s", hf_repo_id)
+            self.checkpoint_info = loaders.CheckpointInfo.from_hf_repo(hf_repo=hf_repo_id)
 
-        # Load LM
-        logger.info("Loading Moshi LM...")
-        lm_config = (
+            # Dual Mimi
+            logger.info("Loading Mimi codec (x2)...")
+            self.mimi = self.checkpoint_info.get_mimi(device=device)
+            self.mimi.eval()
+            self.other_mimi = self.checkpoint_info.get_mimi(device=device)
+            self.other_mimi.eval()
+            self.sample_rate = self.mimi.sample_rate
+
+            # Text tokenizer
+            self.spm = self.checkpoint_info.get_text_tokenizer()
+
+            # LM
+            logger.info("Loading Moshi LM...")
+            self.lm_model = self._load_lm(checkpoint_path, str(device))
+            self.lm_model.eval()
+            logger.info("Model loaded (dep_q=%d, n_q=%d).", self.lm_model.dep_q, self.lm_model.n_q)
+
+            # Build LMGen
+            from inference.lm_gen import LMGen
+            self.lm_gen = LMGen(
+                self.lm_model,
+                device=device,
+                use_sampling=not greedy,
+                temp=0.8,
+                temp_text=0.7,
+                top_k=250,
+                top_k_text=25,
+                audio_silence_frame_cnt=int(0.5 * self.mimi.frame_rate),
+                sample_rate=self.sample_rate,
+                frame_rate=self.mimi.frame_rate,
+                save_voice_prompt_embeddings=save_voice_prompt_embeddings,
+            )
+
+            # Enter persistent streaming + warmup (CUDA graphs captured here)
+            self.mimi.streaming_forever(1)
+            self.other_mimi.streaming_forever(1)
+            self.lm_gen.streaming_forever(1)
+
+            self._warmup()
+
+    def _load_lm(self, checkpoint_path: str | None, device: str):
+        lm_config = dict(
             loaders._lm_kwargs
             if self.checkpoint_info.raw_config is None
             else self.checkpoint_info.raw_config
         )
-
-        # If checkpoint has LoRA, enable it
         if checkpoint_path:
             ckpt_dir = Path(checkpoint_path)
             config_path = ckpt_dir / "config.json"
@@ -129,39 +136,54 @@ class MoshiInference:
                     lm_config["lora_rank"] = ckpt_config.get("lora_rank", 128)
                     lm_config["lora_scaling"] = ckpt_config.get("lora_scaling", 2.0)
 
-        self.lm_model = self.checkpoint_info.get_moshi(device=device, config=lm_config)
+        model = self.checkpoint_info.get_moshi(device=device, lm_kwargs_overrides=lm_config)
 
-        # Load finetuned weights if provided
         if checkpoint_path:
-            self._load_checkpoint(checkpoint_path)
+            self._load_checkpoint_weights(model, checkpoint_path, device)
 
-        self.lm_model.eval()
-        logger.info("Model loaded successfully.")
+        return model
 
-    def _load_checkpoint(self, checkpoint_path: str):
-        """Load finetuned weights (LoRA or full) from checkpoint directory."""
+    def _load_checkpoint_weights(self, model, checkpoint_path: str, device: str):
         ckpt_dir = Path(checkpoint_path)
-
-        # Look for safetensors or .pt checkpoint files
-        from safetensors.torch import load_file
-
         safetensor_files = list(ckpt_dir.glob("*.safetensors"))
         if safetensor_files:
             logger.info("Loading checkpoint from %s", safetensor_files[0])
-            state_dict = load_file(str(safetensor_files[0]))
-            missing, unexpected = self.lm_model.load_state_dict(state_dict, strict=False)
+            state_dict = load_file(str(safetensor_files[0]), device=device)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
             if missing:
-                logger.warning("Missing keys: %d (expected for LoRA)", len(missing))
-            if unexpected:
-                logger.warning("Unexpected keys: %d", len(unexpected))
+                logger.info("Missing keys: %d", len(missing))
         else:
             pt_files = list(ckpt_dir.glob("*.pt"))
             if pt_files:
                 logger.info("Loading checkpoint from %s", pt_files[0])
-                state_dict = torch.load(str(pt_files[0]), map_location=self.device)
-                self.lm_model.load_state_dict(state_dict, strict=False)
+                state_dict = torch.load(str(pt_files[0]), map_location=device)
+                model.load_state_dict(state_dict, strict=False)
             else:
                 logger.warning("No checkpoint files found in %s", ckpt_dir)
+
+    def _warmup(self):
+        """Run warmup iterations to prime JIT and CUDA graphs."""
+        from inference.lm_gen import encode_from_sphn, _iterate_audio
+        frame_size = int(self.sample_rate / self.mimi.frame_rate)
+
+        for _ in range(4):
+            chunk = torch.zeros(1, 1, frame_size, dtype=torch.float32, device=self.device)
+            codes = self.mimi.encode(chunk)
+            _ = self.other_mimi.encode(chunk)
+            for c in range(codes.shape[-1]):
+                tokens = self.lm_gen.step(codes[:, :, c:c + 1])
+                if tokens is None:
+                    continue
+                _ = self.mimi.decode(tokens[:, 1:1 + N_MIMI_CODEBOOKS])
+                _ = self.other_mimi.decode(tokens[:, 1:1 + N_MIMI_CODEBOOKS])
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+
+        self.mimi.reset_streaming()
+        self.other_mimi.reset_streaming()
+        self.lm_gen.reset_streaming()
+        logger.info("Warmup complete.")
 
     @torch.no_grad()
     def generate(
@@ -172,135 +194,128 @@ class MoshiInference:
         max_duration_sec: float = 30.0,
         temperature: float = 0.8,
         top_k: int = 250,
-    ) -> tuple[np.ndarray, int]:
-        """Generate assistant response for given user audio.
-
-        Args:
-            user_audio_path: Path to user audio WAV file.
-            system_prompt: System prompt text for conditioning.
-            voice_prompt_path: Optional path to voice prompt WAV (3-10s).
-            max_duration_sec: Maximum output duration in seconds.
-            temperature: Sampling temperature.
-            top_k: Top-k sampling parameter.
+    ) -> tuple[np.ndarray, int, list[str]]:
+        """Generate assistant response.
 
         Returns:
-            Tuple of (audio_array, sample_rate).
+            Tuple of (audio_array, sample_rate, text_tokens).
         """
-        from moshi.models.lm import LMGen
+        from inference.lm_gen import encode_from_sphn, _iterate_audio
 
-        # Tokenize system prompt
-        text_prompt_tokens = None
-        if system_prompt:
-            tagged_prompt = wrap_with_system_tags(system_prompt)
-            text_prompt_tokens = torch.tensor(
-                self.spm.encode(tagged_prompt),
-                dtype=torch.long,
-                device=self.device,
-            )
+        lm_gen = self.lm_gen
+        frame_size = int(self.sample_rate / self.mimi.frame_rate)
 
-        # Build LMGen
-        lm_gen = LMGen(
-            self.lm_model,
-            temp=temperature,
-            top_k=top_k,
-            text_prompt_tokens=text_prompt_tokens,
-        )
-
-        # Load voice prompt if provided
-        if voice_prompt_path and Path(voice_prompt_path).exists():
-            lm_gen.load_voice_prompt(voice_prompt_path)
-
-        # Reset streaming state
+        # Reset streaming
         self.mimi.reset_streaming()
+        self.other_mimi.reset_streaming()
         lm_gen.reset_streaming()
 
-        # Step through system prompts (voice → silence → text → silence)
+        # Configure prompts
+        if system_prompt:
+            lm_gen.text_prompt_tokens = self.spm.encode(wrap_with_system_tags(system_prompt))
+        else:
+            lm_gen.text_prompt_tokens = None
+
+        if voice_prompt_path:
+            p = Path(voice_prompt_path)
+            if p.suffix == ".pt" and p.exists():
+                lm_gen.load_voice_prompt_embeddings(str(p))
+            elif p.exists():
+                lm_gen.load_voice_prompt(str(p))
+            else:
+                lm_gen.voice_prompt_audio = None
+        else:
+            lm_gen.voice_prompt_audio = None
+
+        # Phase 1-4: prompt injection
         lm_gen.step_system_prompts(self.mimi)
+        self.mimi.reset_streaming()
 
-        # Load and encode user audio
-        user_audio = load_audio(user_audio_path, self.sample_rate)
-        user_audio = user_audio.to(self.device)
+        # Load user audio
+        user_audio, sr = sphn.read(user_audio_path)
+        user_audio = sphn.resample(user_audio, src_sample_rate=sr, dst_sample_rate=self.sample_rate)
+        if user_audio.ndim == 1:
+            user_audio = user_audio[np.newaxis, :]
+        if user_audio.shape[0] > 1:
+            user_audio = user_audio[0:1]
 
-        # Limit duration
         max_samples = int(max_duration_sec * self.sample_rate)
         if user_audio.shape[-1] > max_samples:
-            user_audio = user_audio[..., :max_samples]
+            user_audio = user_audio[:, :max_samples]
+        total_target_samples = user_audio.shape[-1]
 
-        # Encode user audio frame by frame with Mimi
-        frame_size = int(self.sample_rate / self.mimi.frame_rate)
-        num_frames = user_audio.shape[-1] // frame_size
-
+        # Stream and collect output
         output_frames = []
+        text_tokens = []
 
-        for i in range(num_frames):
-            start = i * frame_size
-            end = start + frame_size
-            frame = user_audio[..., start:end]
-
-            if frame.ndim == 2:
-                frame = frame.unsqueeze(0)  # (1, 1, frame_size)
-
-            # Encode user frame
-            user_codes = self.mimi.encode(frame)
-
-            # Step the LM: feed user codes, get assistant codes
-            out = lm_gen.step(input_tokens=user_codes)
-
-            if out is not None:
-                # Decode assistant codes to audio
-                assistant_audio = self.mimi.decode(out.unsqueeze(0))
-                output_frames.append(assistant_audio.squeeze().cpu())
+        for user_encoded in encode_from_sphn(
+            self.mimi,
+            _iterate_audio(user_audio, sample_interval_size=frame_size, pad=True),
+        ):
+            for c in range(user_encoded.shape[-1]):
+                tokens = lm_gen.step(user_encoded[:, :, c:c + 1])
+                if tokens is None:
+                    continue
+                # Decode agent audio
+                agent_codes = tokens[:, 1:1 + N_MIMI_CODEBOOKS]
+                pcm = self.mimi.decode(agent_codes)
+                _ = self.other_mimi.decode(agent_codes)
+                output_frames.append(pcm.detach().cpu().numpy()[0, 0])
+                # Collect text token
+                text_tok = tokens[0, 0, 0].item()
+                text_tokens.append(text_tok)
 
         if not output_frames:
             logger.warning("No output frames generated")
-            return np.zeros(self.sample_rate, dtype=np.float32), self.sample_rate
+            return np.zeros(self.sample_rate, dtype=np.float32), self.sample_rate, []
 
-        # Concatenate output
-        output_audio = torch.cat(output_frames, dim=-1).numpy()
+        output_audio = np.concatenate(output_frames, axis=-1)
 
-        # Normalize output
-        peak = np.abs(output_audio).max()
-        if peak > 0:
-            output_audio = output_audio * (0.95 / peak)
+        # Trim/pad to match input duration
+        if output_audio.shape[-1] > total_target_samples:
+            output_audio = output_audio[:total_target_samples]
+        elif output_audio.shape[-1] < total_target_samples:
+            output_audio = np.concatenate([
+                output_audio,
+                np.zeros(total_target_samples - output_audio.shape[-1], dtype=output_audio.dtype),
+            ])
 
-        return output_audio.astype(np.float32), self.sample_rate
+        # Decode text tokens to strings
+        text_strs = []
+        text_token_map = {0: "[EPAD]", 1: "[BOS]", 2: "[EOS]", 3: "[PAD]"}
+        for tok in text_tokens:
+            if tok in text_token_map:
+                text_strs.append(text_token_map[tok])
+            else:
+                try:
+                    text_strs.append(self.spm.id_to_piece(tok).replace("\u2581", " "))
+                except Exception:
+                    text_strs.append(f"[{tok}]")
+
+        return output_audio.astype(np.float32), self.sample_rate, text_strs
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="SteerDuplex offline inference",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic inference
-  python -m inference.generate --user_audio input.wav --output output.wav
-
-  # With system prompt and voice
-  python -m inference.generate \\
-      --user_audio input.wav \\
-      --output output.wav \\
-      --system_prompt "You are a friendly tutor." \\
-      --voice_prompt voices/ryan_ref.wav
-
-  # With finetuned model
-  python -m inference.generate \\
-      --user_audio input.wav \\
-      --output output.wav \\
-      --checkpoint runs/pilot_v1/checkpoint_3000 \\
-      --system_prompt "You are a helpful assistant."
-        """,
-    )
-
-    parser.add_argument("--user_audio", type=str, required=True, help="Path to user audio WAV file")
-    parser.add_argument("--output", type=str, default="output.wav", help="Output WAV path")
-    parser.add_argument("--system_prompt", type=str, default="", help="System prompt text")
-    parser.add_argument("--voice_prompt", type=str, default=None, help="Path to voice prompt WAV (3-10s)")
-    parser.add_argument("--checkpoint", type=str, default=None, help="Path to finetuned checkpoint dir")
-    parser.add_argument("--hf_repo", type=str, default="kyutai/moshiko-pytorch-bf16", help="HuggingFace model repo")
-    parser.add_argument("--device", type=str, default="cuda", help="Device (cuda/cpu)")
-    parser.add_argument("--max_duration", type=float, default=30.0, help="Max output duration (seconds)")
-    parser.add_argument("--temperature", type=float, default=0.8, help="Sampling temperature")
-    parser.add_argument("--top_k", type=int, default=250, help="Top-k sampling")
+    parser = argparse.ArgumentParser(description="SteerDuplex offline inference")
+    parser.add_argument("--user_audio", type=str, required=True)
+    parser.add_argument("--output", type=str, default="output.wav")
+    parser.add_argument("--output_text", type=str, default=None,
+                        help="Save decoded text tokens to JSON")
+    parser.add_argument("--system_prompt", type=str, default="")
+    parser.add_argument("--voice_prompt", type=str, default=None,
+                        help="Voice prompt WAV or .pt embeddings")
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--hf_repo", type=str, default="kyutai/moshiko-pytorch-bf16")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--max_duration", type=float, default=30.0)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top_k", type=int, default=250)
+    parser.add_argument("--seed", type=int, default=-1,
+                        help="Seed for reproducibility (-1 disables)")
+    parser.add_argument("--greedy", action="store_true",
+                        help="Disable sampling (greedy decoding)")
+    parser.add_argument("--save_voice_embeddings", action="store_true",
+                        help="Save voice prompt embeddings to .pt for fast reuse")
 
     args = parser.parse_args()
 
@@ -311,26 +326,19 @@ Examples:
     )
 
     if not Path(args.user_audio).exists():
-        print(f"Error: user audio not found: {args.user_audio}")
+        print(f"Error: {args.user_audio} not found")
         sys.exit(1)
 
-    # Load model
     model = MoshiInference(
         hf_repo_id=args.hf_repo,
         checkpoint_path=args.checkpoint,
         device=args.device,
+        seed=args.seed if args.seed >= 0 else None,
+        greedy=args.greedy,
+        save_voice_prompt_embeddings=args.save_voice_embeddings,
     )
 
-    # Generate
-    print(f"Generating response for: {args.user_audio}")
-    if args.system_prompt:
-        print(f"System prompt: {args.system_prompt}")
-    if args.voice_prompt:
-        print(f"Voice prompt: {args.voice_prompt}")
-    if args.checkpoint:
-        print(f"Checkpoint: {args.checkpoint}")
-
-    audio, sr = model.generate(
+    audio, sr, text_tokens = model.generate(
         user_audio_path=args.user_audio,
         system_prompt=args.system_prompt,
         voice_prompt_path=args.voice_prompt,
@@ -339,10 +347,14 @@ Examples:
         top_k=args.top_k,
     )
 
-    # Save output
     import soundfile as sf
     sf.write(args.output, audio, sr)
-    print(f"Output saved to: {args.output} ({len(audio)/sr:.1f}s)")
+    print(f"Output: {args.output} ({len(audio)/sr:.1f}s)")
+
+    if args.output_text:
+        with open(args.output_text, "w") as f:
+            json.dump(text_tokens, f, ensure_ascii=False)
+        print(f"Text: {args.output_text}")
 
 
 if __name__ == "__main__":

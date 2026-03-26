@@ -26,6 +26,8 @@ from pipeline.utils import ensure_dir, load_all_categories, load_yaml, save_json
 
 # Module-level client, initialized in main()
 _client: OpenAI | None = None
+# Weighted model list: [(model_name, cumulative_weight), ...]
+_model_choices: list[tuple[str, float]] = []
 
 # ---------------------------------------------------------------------------
 # System prompt templates (role + boundaries, NEVER style/tone)
@@ -43,6 +45,59 @@ SYSTEM_PROMPT_TEMPLATES = {
     "qa": (
         "You are a knowledgeable assistant. Your voice and identity are fixed. "
         "Be accurate and helpful. If you don't know something, say so honestly."
+    ),
+    # B-series system prompts
+    "reasoning": (
+        "You are a helpful voice assistant skilled at logical reasoning and problem-solving. "
+        "Think step-by-step and explain your reasoning aloud. If you're unsure, say so."
+    ),
+    "math": (
+        "You are a patient math tutor. Work through problems step-by-step, explaining each "
+        "operation aloud. Double-check your calculations. Be encouraging when the user struggles."
+    ),
+    "knowledge_expert": (
+        "You are a knowledgeable assistant with deep expertise across many domains. "
+        "Be accurate, cite reasoning, and add appropriate caveats for medical/legal topics. "
+        "If you don't know something, say so honestly."
+    ),
+    "instruction_follower": (
+        "You are a precise voice assistant that follows instructions exactly. "
+        "Pay attention to format constraints, step ordering, and specific requirements. "
+        "If an instruction is unclear, ask for clarification."
+    ),
+    "memory_coherent": (
+        "You are a voice assistant with excellent conversational memory. "
+        "Remember details from earlier in the conversation and maintain consistency. "
+        "If the user contradicts something they said earlier, gently ask about it."
+    ),
+    "paralinguistic": (
+        "You are an emotionally intelligent voice assistant. Pay attention to how "
+        "the user speaks, not just what they say. Adapt your tone and approach to "
+        "match their emotional state."
+    ),
+    "creative": (
+        "You are a creative and engaging voice assistant. You enjoy wordplay, "
+        "storytelling, poetry, and creative collaboration. Be expressive and playful."
+    ),
+    "robust": (
+        "You are a patient voice assistant. When the user's speech is unclear, "
+        "disfluent, or interrupted, stay calm, ask for clarification on the specific "
+        "part you missed, and never comment negatively on their speech patterns."
+    ),
+    "duplex": (
+        "You are a natural conversationalist. Handle interruptions gracefully, "
+        "provide backchannels when appropriate, and manage turn-taking smoothly. "
+        "If interrupted, stop cleanly and address what the user said."
+    ),
+    "speech_expert": (
+        "You are a voice assistant with strong awareness of language and speech. "
+        "You understand phonetics, pronunciation, homophones, and prosody. "
+        "Help users with pronunciation and language questions."
+    ),
+    "safety": (
+        "You are a helpful voice assistant with clear safety boundaries. "
+        "Decline harmful requests kindly and offer alternatives. Never be preachy "
+        "or lecture the user — be brief, warm, and redirect to something helpful."
     ),
 }
 
@@ -200,6 +255,272 @@ Generate a spoken conversation where the ASSISTANT must handle a difficult situa
 
 
 # ---------------------------------------------------------------------------
+# B-series meta-prompts (capabilities beyond steerability)
+# ---------------------------------------------------------------------------
+META_PROMPT_REASONING = """\
+Generate a spoken conversation where the USER asks questions that require LOGICAL REASONING.
+
+## Context
+- Reasoning type: {reasoning_type}
+- Subcategory: {subcategory}
+- Difficulty: {difficulty}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User speaks first with a question or puzzle that requires reasoning.
+2. The assistant must THINK STEP-BY-STEP aloud — say each reasoning step as it works through the problem.
+3. The user should ask follow-up questions like "wait, how did you get that?" or "can you explain that step?"
+4. Include natural filler words ("um", "let me think", "so basically"). NO stage directions.
+5. Assistant tts_instruct: SHORT, max 3 descriptors. E.g., "thoughtful, measured pace, clear"
+6. The ANSWER MUST BE CORRECT. Double-check all logic.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "reasoning_type": "{reasoning_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_MATH = """\
+Generate a spoken conversation involving MATHEMATICAL REASONING.
+
+## Context
+- Math type: {math_type}
+- Difficulty: {difficulty}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User asks a math question or problem.
+2. Assistant works through it STEP-BY-STEP aloud: "Let me work through this. First... then... so the answer is..."
+3. All numbers must be spoken as words: "three hundred forty-seven", not "347".
+4. The ANSWER MUST BE MATHEMATICALLY CORRECT. Verify before outputting.
+5. User should ask follow-ups or give new problems.
+6. Include filler: "hmm", "let me think", "okay so". NO stage directions.
+7. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "math_type": "{math_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_KNOWLEDGE = """\
+Generate a spoken conversation requiring EXPERT-LEVEL KNOWLEDGE.
+
+## Context
+- Domain: {domain}
+- Topic: {topic}
+- Depth: {depth}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User asks questions requiring real, accurate knowledge — not surface-level.
+2. Assistant provides ACCURATE information. If medical/legal, add "I'm not a doctor/lawyer" caveat.
+3. Multi-turn: user drills deeper with follow-ups. Later questions build on earlier answers.
+4. For fact-verification, clearly state whether claims are true/false/partially-true with reasoning.
+5. Include natural speech patterns. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "domain": "{domain}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_INSTRUCTION = """\
+Generate a spoken conversation testing INSTRUCTION FOLLOWING.
+
+## Context
+- Instruction type: {instruction_type}
+- Specific constraint: {constraint}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User gives a clear instruction with specific constraints (format, count, conditional, etc.).
+2. Assistant must follow the instruction EXACTLY — not approximately.
+3. If the user catches a violation: "Hey, you didn't follow the rule about X" — assistant acknowledges and corrects.
+4. Include at least one turn where the constraint is actively tested.
+5. Natural speech. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "instruction_type": "{instruction_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_MEMORY = """\
+Generate a LONG spoken conversation (12-20 turns) testing MEMORY AND COHERENCE.
+
+## Context
+- Memory test type: {memory_type}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User introduces specific details (names, numbers, facts) in early turns.
+2. These details are referenced or tested in LATER turns (5+ turns apart).
+3. Assistant must correctly recall earlier information without contradictions.
+4. Include at least one "memory test" where the user asks about earlier content.
+5. For contradiction detection: user introduces contradicting info, assistant catches it gently.
+6. Natural speech. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "memory_type": "{memory_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_PARALINGUISTIC = """\
+Generate a spoken conversation where the assistant must respond to the USER'S EMOTIONAL STATE.
+
+## Context
+- Emotion scenario: {scenario}
+- User's actual emotion: {user_emotion}
+- User's text: may be NEUTRAL — the emotion is conveyed through HOW they speak (tts_instruct), not what they say
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. The user's TEXT can be neutral/ambiguous, but their tts_instruct encodes the real emotion.
+2. The assistant must DETECT the emotion from context and respond appropriately.
+3. A BAD response ignores or misreads the emotion. A GOOD response shows awareness.
+4. The assistant's tone should MATCH the emotional context (empathetic for sad, celebratory for happy, etc.).
+5. Natural speech. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+6. User tts_instruct MUST reflect the actual emotion: "{user_tts}"
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "scenario": "{scenario}",
+  "user_emotion": "{user_emotion}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "{user_tts}"}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_CREATIVE = """\
+Generate a spoken conversation involving CREATIVE LANGUAGE.
+
+## Context
+- Creative type: {creative_type}
+- Specific task: {task}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. The conversation involves creative output: stories, poetry, wordplay, debate, etc.
+2. If poetry: maintain proper rhythm and rhyme scheme. If story: maintain narrative arc.
+3. If debate: both sides present genuine arguments. Assistant may play devil's advocate.
+4. The output should be genuinely creative and engaging, not generic.
+5. Natural speech with creative flair. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "creative_type": "{creative_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_ROBUSTNESS = """\
+Generate a spoken conversation where the USER speaks IMPERFECTLY (disfluent, unclear, self-correcting).
+
+## Context
+- Disfluency type: {disfluency_type}
+- Scenario: {scenario}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. User turns include realistic speech imperfections: stuttering, false starts, self-corrections, fillers, trailing off.
+2. The assistant must EXTRACT THE INTENDED MEANING despite disfluencies.
+3. The assistant NEVER comments negatively on the user's speech. Stay patient and helpful.
+4. For self-corrections: always use the FINAL corrected value.
+5. For trailing off: gently ask for completion.
+6. User tts_instruct must reflect the disfluency pattern.
+7. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "disfluency_type": "{disfluency_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_DUPLEX = """\
+Generate a spoken conversation showcasing NATURAL DUPLEX INTERACTION PATTERNS.
+
+## Context
+- Pattern type: {pattern_type}
+- Scenario: {scenario}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. This conversation simulates full-duplex speech interaction patterns.
+2. Pattern type "{pattern_type}" must be clearly demonstrated.
+3. For BACKCHANNELING: include brief "mm-hmm", "right", "I see" interjections from the assistant during user's long turns. Mark with "is_backchannel": true.
+4. For INTERRUPTION: user cuts off assistant mid-sentence. Mark with "is_interruption": true. Assistant stops and addresses the interruption.
+5. For CORRECTION: user corrects model mid-response. Mark with "is_correction": true. Model adjusts immediately.
+6. For PAUSE: mark extended silences with "pause_sec": N.
+7. Natural speech. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "pattern_type": "{pattern_type}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+META_PROMPT_SPEECH_UNDERSTANDING = """\
+Generate a spoken conversation about SPEECH AND LANGUAGE PHENOMENA.
+
+## Context
+- Topic: {speech_topic}
+- Specific focus: {focus}
+- System prompt: {system_prompt}
+- Number of turns: {num_turns}
+
+## CRITICAL Rules
+1. The conversation involves speech-specific understanding: homophones, phonetics, pronunciation, prosody, etc.
+2. The assistant must demonstrate genuine understanding of HOW language sounds, not just what it means.
+3. When explaining pronunciation, use approximate phonetic spelling: "kuh-NEL" for "colonel".
+4. For homophones: demonstrate correct disambiguation from context.
+5. Natural speech. NO stage directions. tts_instruct: SHORT, max 3 descriptors.
+
+## Output: ONLY valid JSON, no markdown
+{{
+  "speech_topic": "{speech_topic}",
+  "turns": [
+    {{"role": "user", "text": "...", "tts_instruct": "..."}},
+    {{"role": "assistant", "text": "...", "tts_instruct": "..."}}
+  ]
+}}"""
+
+
+# ---------------------------------------------------------------------------
 # Trait sampling per category
 # ---------------------------------------------------------------------------
 def sample_traits(category_data: dict, category_id: str) -> dict:
@@ -306,6 +627,156 @@ def sample_traits(category_data: dict, category_id: str) -> dict:
                 if scenarios:
                     traits["scenario"] = random.choice(scenarios) if isinstance(scenarios[0], str) else random.choice(list(scenarios.keys()))
 
+    # --- B-series categories ---
+    elif category_id.startswith("B1"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            subcat = random.choice(subcats)
+            traits["reasoning_type"] = subcat
+            traits["subcategory"] = subcat
+        traits["difficulty"] = random.choice(["easy", "medium", "hard"])
+
+    elif category_id.startswith("B2"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["math_type"] = random.choice(subcats)
+        traits["difficulty"] = random.choice(["easy", "medium", "hard"])
+
+    elif category_id.startswith("B3"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            subcat = random.choice(subcats)
+            traits["domain"] = subcat
+            subcat_data = category_data["categories"][subcat]
+            if isinstance(subcat_data, dict):
+                domains = subcat_data.get("domains", subcat_data.get("topics", {}))
+                if isinstance(domains, dict) and domains:
+                    traits["topic"] = random.choice(list(domains.keys()))
+                elif isinstance(domains, list) and domains:
+                    traits["topic"] = random.choice(domains)
+                # Fallback: try examples list for subcats like multi_hop_qa
+                if "topic" not in traits:
+                    examples = subcat_data.get("examples", [])
+                    if examples:
+                        traits["topic"] = random.choice(examples) if isinstance(examples[0], str) else subcat
+                    else:
+                        traits["topic"] = subcat
+        traits["depth"] = random.choice(["intermediate", "advanced", "expert"])
+
+    elif category_id.startswith("B4"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["instruction_type"] = random.choice(subcats)
+        constraints = [
+            "exactly 5 items", "one sentence only", "no jargon",
+            "numbered list", "start each point with a verb",
+            "under 20 words", "alphabetical order", "if X then Y format",
+        ]
+        traits["constraint"] = random.choice(constraints)
+
+    elif category_id.startswith("B5"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["memory_type"] = random.choice(subcats)
+
+    elif category_id.startswith("B6"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            subcat = random.choice(subcats)
+            traits["scenario"] = subcat
+        emotions_map = {
+            "emotion_aware_response": ("hidden_sadness", "flat, subdued, low energy"),
+            "sarcasm_irony_extended": ("sarcasm", "flat, sarcastic emphasis, exaggerated"),
+            "urgency_detection": ("urgency", "fast, stressed, clipped"),
+            "hesitation_uncertainty": ("uncertainty", "hesitant, trailing off, quiet"),
+            "excitement_matching": ("excitement", "ecstatic, fast, high energy"),
+            "grief_sensitivity": ("grief", "quiet, choked up, slow"),
+            "formality_inference": ("formality", "varies per scenario"),
+            "age_appropriate_adaptation": ("adaptation", "varies per scenario"),
+        }
+        emo_info = emotions_map.get(subcat, ("neutral", "natural, conversational"))
+        traits["user_emotion"] = emo_info[0]
+        traits["user_tts"] = emo_info[1]
+
+    elif category_id.startswith("B7"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["creative_type"] = random.choice(subcats)
+        tasks = [
+            "Tell a bedtime story about a brave fox",
+            "Write a limerick about programming",
+            "Let's debate: is social media good or bad?",
+            "Give me 5 puns about food",
+            "Explain quantum physics as a fairy tale",
+            "Write a haiku about the ocean",
+            "Let's play word association",
+            "Write a rap verse about Monday mornings",
+        ]
+        traits["task"] = random.choice(tasks)
+
+    elif category_id.startswith("B8"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["disfluency_type"] = random.choice(subcats)
+        scenarios = [
+            "asking for directions with lots of fillers",
+            "ordering food while self-correcting",
+            "describing a problem with false starts",
+            "asking a question in a noisy environment",
+            "speaking with a heavy accent about technology",
+            "trailing off while explaining something complex",
+        ]
+        traits["scenario"] = random.choice(scenarios)
+
+    elif category_id.startswith("B9"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["pattern_type"] = random.choice(subcats)
+        scenarios = [
+            "casual conversation with natural turn-taking",
+            "user telling a long story with backchannels",
+            "user interrupting to change topic",
+            "user correcting a factual error",
+            "long pause while user thinks",
+            "both speakers accidentally overlapping",
+        ]
+        traits["scenario"] = random.choice(scenarios)
+
+    elif category_id.startswith("B10"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["speech_topic"] = random.choice(subcats)
+        focuses = [
+            "homophones in context", "rhyming words", "pronunciation guidance",
+            "stress and emphasis", "onomatopoeia", "code-switching with French phrases",
+            "heteronyms", "syllable counting", "phonetic spelling",
+        ]
+        traits["focus"] = random.choice(focuses)
+
+    elif category_id.startswith("B11"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            failure_type = random.choice(subcats)
+            traits["failure_type"] = failure_type
+        scenarios = [
+            "user tries roleplay bypass", "user asks for harmful content",
+            "user states misinformation confidently", "user shares sensitive data",
+            "user asks about controversial topic", "user claims authority for advice",
+            "user tries emotional manipulation",
+        ]
+        traits["scenario"] = random.choice(scenarios)
+
+    elif category_id.startswith("B12"):
+        subcats = list(category_data.get("categories", {}).keys())
+        if subcats:
+            traits["dialogue_type"] = random.choice(subcats)
+        topics = [
+            "artificial intelligence", "climate change", "philosophy of consciousness",
+            "modern economics", "space exploration", "history of music",
+            "startup planning", "ethical dilemma", "quantum computing",
+        ]
+        traits["topic"] = random.choice(topics)
+
     return traits
 
 
@@ -316,12 +787,38 @@ def build_system_prompt(traits: dict) -> str:
         return SYSTEM_PROMPT_TEMPLATES["customer_service"].format(domain=traits["domain"])
     elif cat.startswith("A2"):
         return SYSTEM_PROMPT_TEMPLATES["qa"]
+    elif cat.startswith("B1"):
+        return SYSTEM_PROMPT_TEMPLATES["reasoning"]
+    elif cat.startswith("B2"):
+        return SYSTEM_PROMPT_TEMPLATES["math"]
+    elif cat.startswith("B3"):
+        return SYSTEM_PROMPT_TEMPLATES["knowledge_expert"]
+    elif cat.startswith("B4"):
+        return SYSTEM_PROMPT_TEMPLATES["instruction_follower"]
+    elif cat.startswith("B5"):
+        return SYSTEM_PROMPT_TEMPLATES["memory_coherent"]
+    elif cat.startswith("B6"):
+        return SYSTEM_PROMPT_TEMPLATES["paralinguistic"]
+    elif cat.startswith("B7"):
+        return SYSTEM_PROMPT_TEMPLATES["creative"]
+    elif cat.startswith("B8"):
+        return SYSTEM_PROMPT_TEMPLATES["robust"]
+    elif cat.startswith("B9"):
+        return SYSTEM_PROMPT_TEMPLATES["duplex"]
+    elif cat.startswith("B10"):
+        return SYSTEM_PROMPT_TEMPLATES["speech_expert"]
+    elif cat.startswith("B11"):
+        return SYSTEM_PROMPT_TEMPLATES["safety"]
+    elif cat.startswith("B12"):
+        return SYSTEM_PROMPT_TEMPLATES["knowledge_expert"]
+    elif cat.startswith("A"):
+        return SYSTEM_PROMPT_TEMPLATES["generic"]
     else:
         return SYSTEM_PROMPT_TEMPLATES["generic"]
 
 
-def sample_data_type(weights: dict, category_id: str) -> str:
-    """Sample a data type, respecting category constraints."""
+def sample_data_type(weights: dict, category_id: str, category_data: dict | None = None) -> str:
+    """Sample a data type, respecting category constraints and overrides."""
     # A9 should mostly be dynamic, A10 should mostly be graceful_failure
     if category_id.startswith("A9"):
         return random.choices(
@@ -331,6 +828,13 @@ def sample_data_type(weights: dict, category_id: str) -> str:
         return random.choices(
             ["graceful_failure", "standard"], weights=[0.85, 0.15], k=1
         )[0]
+
+    # B-series: check for data_type_override in category YAML
+    if category_data and "data_type_override" in category_data:
+        override = category_data["data_type_override"]
+        types = list(override.keys())
+        probs = [override[t] for t in types]
+        return random.choices(types, weights=probs, k=1)[0]
 
     types = list(weights.keys())
     probs = [weights[t] for t in types]
@@ -348,11 +852,18 @@ COUNTERFACTUAL_DIMENSIONS = {
 
 
 def build_llm_prompt(traits: dict, data_type: str, system_prompt: str, turns_range: tuple[int, int]) -> str:
-    """Build the appropriate meta-prompt based on data type."""
+    """Build the appropriate meta-prompt based on data type and category."""
     clean_traits = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
     traits_json = json.dumps(clean_traits, indent=2)
     category = traits.get("category", "unknown")
 
+    # --- B-series category-specific prompts ---
+    # These use specialized meta-prompts regardless of data_type
+    # (unless data_type is dynamic/counterfactual/graceful_failure, which use A-series prompts)
+    if category.startswith("B") and data_type in ("standard", "long_form"):
+        return _build_b_series_prompt(traits, system_prompt, turns_range, category)
+
+    # --- A-series and fallback data-type-based prompts ---
     if data_type == "standard":
         num_turns = random.randint(turns_range[0], turns_range[1])
         return META_PROMPT_STANDARD.format(
@@ -399,6 +910,146 @@ def build_llm_prompt(traits: dict, data_type: str, system_prompt: str, turns_ran
     )
 
 
+def _build_b_series_prompt(traits: dict, system_prompt: str, turns_range: tuple[int, int], category: str) -> str:
+    """Build specialized prompts for B-series categories."""
+
+    if category.startswith("B1"):
+        num_turns = random.randint(max(4, turns_range[0]), min(10, turns_range[1]))
+        return META_PROMPT_REASONING.format(
+            reasoning_type=traits.get("reasoning_type", "commonsense_reasoning"),
+            subcategory=traits.get("subcategory", "general"),
+            difficulty=traits.get("difficulty", "medium"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B2"):
+        num_turns = random.randint(max(3, turns_range[0]), min(8, turns_range[1]))
+        return META_PROMPT_MATH.format(
+            math_type=traits.get("math_type", "word_problems"),
+            difficulty=traits.get("difficulty", "medium"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B3"):
+        num_turns = random.randint(max(3, turns_range[0]), min(10, turns_range[1]))
+        return META_PROMPT_KNOWLEDGE.format(
+            domain=traits.get("domain", "science_deep_dive"),
+            topic=traits.get("topic", "general"),
+            depth=traits.get("depth", "intermediate"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B4"):
+        num_turns = random.randint(max(4, turns_range[0]), min(10, turns_range[1]))
+        return META_PROMPT_INSTRUCTION.format(
+            instruction_type=traits.get("instruction_type", "multi_step_instructions"),
+            constraint=traits.get("constraint", "follow instructions exactly"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B5"):
+        num_turns = random.randint(12, 20)
+        return META_PROMPT_MEMORY.format(
+            memory_type=traits.get("memory_type", "entity_tracking"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B6"):
+        num_turns = random.randint(max(4, turns_range[0]), min(10, turns_range[1]))
+        return META_PROMPT_PARALINGUISTIC.format(
+            scenario=traits.get("scenario", "emotion_aware_response"),
+            user_emotion=traits.get("user_emotion", "neutral"),
+            user_tts=traits.get("user_tts", "natural, conversational"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B7"):
+        num_turns = random.randint(max(3, turns_range[0]), min(10, turns_range[1]))
+        return META_PROMPT_CREATIVE.format(
+            creative_type=traits.get("creative_type", "storytelling"),
+            task=traits.get("task", "tell a creative story"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B8"):
+        num_turns = random.randint(max(3, turns_range[0]), min(8, turns_range[1]))
+        return META_PROMPT_ROBUSTNESS.format(
+            disfluency_type=traits.get("disfluency_type", "disfluent_user_speech"),
+            scenario=traits.get("scenario", "general conversation with disfluencies"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B9"):
+        num_turns = random.randint(max(4, turns_range[0]), min(12, turns_range[1]))
+        return META_PROMPT_DUPLEX.format(
+            pattern_type=traits.get("pattern_type", "backchanneling"),
+            scenario=traits.get("scenario", "natural conversation"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B10"):
+        num_turns = random.randint(max(3, turns_range[0]), min(8, turns_range[1]))
+        return META_PROMPT_SPEECH_UNDERSTANDING.format(
+            speech_topic=traits.get("speech_topic", "homophone_disambiguation"),
+            focus=traits.get("focus", "general speech understanding"),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    elif category.startswith("B11"):
+        # Reuse graceful_failure prompt for safety
+        failure_type = traits.get("failure_type", "harmful_content_refusal")
+        scenario = traits.get("scenario", "user asks for something unsafe")
+        num_turns = random.randint(3, 8)
+        return META_PROMPT_GRACEFUL_FAILURE.format(
+            failure_type=failure_type, scenario=scenario,
+            system_prompt=system_prompt, num_turns=num_turns,
+        )
+
+    elif category.startswith("B12"):
+        # Long-form with topic specified
+        num_turns = random.randint(15, 25)
+        clean_traits = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
+        return META_PROMPT_LONG_FORM.format(
+            category=category,
+            traits_json=json.dumps(clean_traits, indent=2),
+            system_prompt=system_prompt,
+            num_turns=num_turns,
+        )
+
+    # Fallback
+    num_turns = random.randint(turns_range[0], turns_range[1])
+    clean_traits = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
+    return META_PROMPT_STANDARD.format(
+        category=category, traits_json=json.dumps(clean_traits, indent=2),
+        system_prompt=system_prompt, num_turns=num_turns,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Model selection (weighted random from configured model list)
+# ---------------------------------------------------------------------------
+def _pick_model() -> str:
+    """Randomly select a model from the weighted model list."""
+    if not _model_choices:
+        raise RuntimeError("No models configured")
+    r = random.random()
+    for model_name, cum_weight in _model_choices:
+        if r <= cum_weight:
+            return model_name
+    return _model_choices[-1][0]  # fallback to last
+
+
 # ---------------------------------------------------------------------------
 # LLM call via OpenAI SDK (pointing at LiteLLM proxy) with retry + backoff
 # ---------------------------------------------------------------------------
@@ -411,12 +1062,15 @@ def call_llm(
     retry_wait_sec: float = 5.0,
 ) -> str | None:
     """Call the LLM via OpenAI SDK with retry logic. Returns raw text or None."""
+    # GPT-5.x models only support temperature=1
+    model_temp = 1.0 if "gpt-5" in model else temperature
+
     for attempt in range(max_retries):
         try:
             response = _client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
+                temperature=model_temp,
                 max_tokens=max_tokens,
             )
             return response.choices[0].message.content.strip()
@@ -466,7 +1120,7 @@ def parse_llm_response(content: str) -> dict | None:
 # Main
 # ---------------------------------------------------------------------------
 def generate_single(
-    model: str,
+    model: str | None,
     category_id: str,
     category_data: dict,
     data_type: str,
@@ -476,12 +1130,18 @@ def generate_single(
     max_retries: int,
     retry_wait_sec: float,
 ) -> dict | None:
-    """Generate a single conversation transcript."""
+    """Generate a single conversation transcript.
+
+    If model is None, randomly selects from the configured model list.
+    """
+    # Pick model for this conversation (diverse generation)
+    selected_model = model if model else _pick_model()
+
     traits = sample_traits(category_data, category_id)
     system_prompt = build_system_prompt(traits)
     prompt = build_llm_prompt(traits, data_type, system_prompt, turns_range)
 
-    content = call_llm(model, prompt, temperature, max_tokens, max_retries, retry_wait_sec)
+    content = call_llm(selected_model, prompt, temperature, max_tokens, max_retries, retry_wait_sec)
     transcript = parse_llm_response(content)
 
     if transcript is None:
@@ -491,6 +1151,7 @@ def generate_single(
     transcript["data_type"] = data_type
     transcript["system_prompt"] = f"<system> {system_prompt} <system>"
     transcript["sampled_traits"] = {k: v for k, v in traits.items() if isinstance(v, (str, int, float, bool, list))}
+    transcript["llm_model"] = selected_model
 
     return transcript
 
@@ -500,14 +1161,17 @@ _counter_lock = threading.Lock()
 
 
 def _worker(
-    model: str,
+    model: str | None,
     category_id: str,
     category_data: dict,
     dt_weights: dict,
     cfg: dict,
 ) -> dict | None:
-    """Worker function for ThreadPoolExecutor."""
-    data_type = sample_data_type(dt_weights, category_id)
+    """Worker function for ThreadPoolExecutor.
+
+    If model is None, each call picks randomly from the configured model list.
+    """
+    data_type = sample_data_type(dt_weights, category_id, category_data)
     return generate_single(
         model=model,
         category_id=category_id,
@@ -536,11 +1200,30 @@ def main():
     set_seed(args.seed)
 
     # Configure OpenAI client (pointing at LiteLLM proxy)
-    global _client
-    model = cfg["llm_model"]
+    global _client, _model_choices
     base_url = cfg.get("llm_base_url") or None
     api_key = cfg.get("llm_api_key") or None  # falls back to OPENAI_API_KEY env var
     _client = OpenAI(base_url=base_url, api_key=api_key)
+
+    # Build weighted model list for diverse generation
+    llm_models_cfg = cfg.get("llm_models")
+    if llm_models_cfg and isinstance(llm_models_cfg, list):
+        # Normalize weights and build cumulative distribution
+        total_weight = sum(m.get("weight", 1.0) for m in llm_models_cfg)
+        cum = 0.0
+        _model_choices = []
+        for m in llm_models_cfg:
+            cum += m.get("weight", 1.0) / total_weight
+            _model_choices.append((m["model"], cum))
+        model = None  # signal to pick randomly per conversation
+        model_names = [m["model"] for m in llm_models_cfg]
+        weights = [m.get("weight", 1.0) for m in llm_models_cfg]
+        print(f"LLM models: {list(zip(model_names, weights))}")
+    else:
+        # Legacy single-model mode
+        model = cfg["llm_model"]
+        _model_choices = [(model, 1.0)]
+        print(f"LLM model: {model}")
 
     categories = load_all_categories(cfg["categories_dir"])
     output_dir = ensure_dir(cfg["output_dir"])

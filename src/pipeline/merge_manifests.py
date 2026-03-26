@@ -152,12 +152,12 @@ def merge(config_path: str, dry_run: bool = False, seed: int = 42) -> dict:  # n
     random.seed(seed)
     random.shuffle(all_train)
 
-    # Auto-split eval if none provided
+    # Auto-split eval if none provided (fixed 500 conversations)
     if not all_eval:
-        n_eval = max(1, int(len(all_train) * 0.05))
+        n_eval = min(500, max(1, len(all_train) // 2))
         all_eval = all_train[:n_eval]
         all_train = all_train[n_eval:]
-        print(f"\nNo eval manifests — auto-split 5% ({len(all_eval)} entries)")
+        print(f"\nNo eval manifests — split {len(all_eval)} entries for eval")
 
     out_train.parent.mkdir(parents=True, exist_ok=True)
     with open(out_train, "w") as f:

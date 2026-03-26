@@ -1,0 +1,131 @@
+# B3: Knowledge & Factual QA (Expert-Level)
+# Target: ~6K conversations, ~150 hours
+# Targets: MMAU, VoiceBench, SOVA-Bench, VocalBench
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Deep knowledge conversations at intermediate-to-expert level. Goes beyond A2's
+  general QA by requiring domain expertise, multi-hop reasoning, and fact verification.
+  Models must demonstrate they retain backbone LLM knowledge through speech.
+
+categories:
+  science_deep_dive:
+    description: "College/expert level science explanations"
+    num_conversations: 1000
+    domains:
+      physics: [quantum_mechanics, relativity, thermodynamics, electromagnetism, particle_physics, astrophysics]
+      chemistry: [organic_reactions, molecular_bonding, electrochemistry, polymer_science, biochemistry]
+      biology: [molecular_biology, evolution, neuroscience, immunology, genetics, ecology]
+      earth_science: [plate_tectonics, climate_science, oceanography, meteorology]
+      computer_science: [complexity_theory, cryptography, distributed_systems, machine_learning, compilers]
+    approach: >
+      User asks expert-level questions. Assistant must explain accurately while
+      remaining accessible. Multi-turn follow-ups test depth.
+
+  history_geopolitics:
+    description: "Historical events, causes, consequences, and reasoning"
+    num_conversations: 800
+    topics:
+      - causes_of_ww1: "Walk me through the chain of events that led to World War I."
+      - fall_of_rome: "What were the primary factors in the fall of the Roman Empire?"
+      - cold_war_dynamics: "Explain the domino theory and its influence on US foreign policy."
+      - industrial_revolution: "How did the Industrial Revolution change social class structures?"
+      - colonialism_effects: "What are the lasting economic effects of colonialism in Africa?"
+
+  technology_engineering:
+    description: "CS concepts, system design, engineering tradeoffs"
+    num_conversations: 700
+    topics:
+      - how_internet_works: "Explain what happens when I type a URL into my browser."
+      - database_design: "When would you choose a NoSQL database over SQL?"
+      - encryption: "How does end-to-end encryption in messaging apps work?"
+      - compiler_pipeline: "Walk me through how source code becomes machine code."
+      - distributed_consensus: "Explain the CAP theorem and why it matters."
+
+  medical_health:
+    description: "Anatomy, conditions, treatments with appropriate caveats"
+    num_conversations: 500
+    approach: >
+      Assistant should be knowledgeable but always caveat with "I'm not a doctor"
+      and "you should consult a healthcare professional." Accurate medical info
+      with appropriate boundaries.
+    topics: [cardiovascular_system, immune_response, neurological_conditions, pharmacology, nutrition_science, mental_health_conditions]
+
+  legal_governance:
+    description: "Law concepts, rights, procedures with caveats"
+    num_conversations: 400
+    approach: >
+      Similar to medical — knowledgeable but with "I'm not a lawyer" caveat.
+    topics: [constitutional_law_basics, contract_law, intellectual_property, criminal_vs_civil, international_law, corporate_governance]
+
+  multi_hop_qa:
+    description: "Questions requiring combining 2-3 facts to answer"
+    num_conversations: 800
+    examples:
+      - "Einstein developed relativity while working at the patent office. What city was that in, and what country?"
+      - "The element with atomic number 79 is used in a famous award. What's the award and the element?"
+      - "The longest river in Africa flows through the capital of which country that has pyramids?"
+      - "Which Shakespeare play is set in the same country where Leonardo da Vinci was born?"
+    approach: >
+      These require the model to chain multiple facts together. The user doesn't
+      give all the information — the model must fill in gaps from knowledge.
+
+  fact_verification:
+    description: "'Is it true that X?' — model reasons about claim validity"
+    num_conversations: 500
+    examples:
+      - "Is it true that we only use 10% of our brains?"
+      - "Someone told me the Great Wall of China is visible from space. Is that accurate?"
+      - "Is it true that lightning never strikes the same place twice?"
+      - "I heard that goldfish have a 3-second memory. Fact or myth?"
+    approach: >
+      Model must evaluate claims, explain why they're true/false/partially-true,
+      and cite the reasoning. Critical for building trust.
+
+  trivia_challenge:
+    description: "Rapid-fire factual questions testing breadth"
+    num_conversations: 500
+    style: "Quick back-and-forth, 1-2 sentence answers"
+    topics: [geography, history, science, arts, sports, pop_culture, nature, technology]
+
+  current_events_reasoning:
+    description: "Reasoning about patterns in world events"
+    num_conversations: 400
+    approach: >
+      Not specific events (which change), but patterns and frameworks:
+      "Why do democracies tend to have lower corruption?",
+      "What typically happens to currency when a country raises interest rates?"
+
+  domain_expertise:
+    description: "Finance, economics, psychology — intermediate level"
+    num_conversations: 400
+    domains:
+      finance: [stock_valuation, bond_pricing, portfolio_theory, options_basics]
+      economics: [supply_demand, monetary_policy, trade_theory, game_theory]
+      psychology: [cognitive_biases, developmental_stages, memory_models, social_psychology]
+
+assistant_traits:
+  default_persona: "knowledgeable expert, accurate, adds appropriate caveats"
+  tts_instruct_templates:
+    default: "clear, authoritative, measured pace"
+    explaining_complex: "patient, breaking it down, natural emphasis"
+    correcting_misconception: "gentle, non-condescending, factual"
+
+user_traits:
+  types:
+    knowledge_seeker: {probability: 0.30, tts: "curious, engaged, asking follow-ups"}
+    fact_checker: {probability: 0.20, tts: "skeptical, questioning, precise"}
+    student: {probability: 0.25, tts: "learning, sometimes confused, appreciative"}
+    quiz_mode: {probability: 0.15, tts: "rapid-fire, testing, competitive"}
+    casual_curious: {probability: 0.10, tts: "relaxed, just wondering, conversational"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 10
+  typical_turns: 6
+  backchannel_probability: 0.3
+
+data_type_override:
+  standard: 0.70
+  long_form: 0.15
+  dynamic: 0.15

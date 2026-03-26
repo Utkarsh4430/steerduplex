@@ -71,11 +71,12 @@ def get_audio_duration(path: str | Path) -> float:
 
 
 def load_all_categories(categories_dir: str | Path) -> dict[str, dict]:
-    """Load all A1-A10 YAML category files."""
+    """Load all category YAML files (A-series steerability + B-series capabilities)."""
     categories = {}
-    for p in sorted(Path(categories_dir).glob("A*.yaml")):
-        cat_id = p.stem
-        categories[cat_id] = load_yaml(p)
+    for pattern in ("A*.yaml", "B*.yaml"):
+        for p in sorted(Path(categories_dir).glob(pattern)):
+            cat_id = p.stem
+            categories[cat_id] = load_yaml(p)
     return categories
 
 

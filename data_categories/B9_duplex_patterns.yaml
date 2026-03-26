@@ -1,0 +1,268 @@
+# B9: Advanced Duplex Interaction Patterns
+# Target: ~6.5K conversations, ~155 hours
+# Targets: Full-Duplex-Bench v1 (Pause Handling!), Full-Duplex-Bench v2, HumDial, Game-Time
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations specifically training full-duplex interaction patterns —
+  backchanneling, interruptions, corrections, pause management, and
+  turn-taking. These behaviors are what differentiate full-duplex models
+  from turn-based systems, and are directly tested by Full-Duplex-Bench v2
+  and HumDial (ICASSP 2026 challenge).
+
+  NOTE: In the assembly phase, these conversations get special treatment:
+  - Backchannel turns have overlap with the opposite channel
+  - Interruption turns have abrupt cutoffs on the assistant channel
+  - Pause turns have extended silence inserted
+  These are encoded in metadata for assemble_channels.py to handle.
+
+categories:
+  backchanneling:
+    description: "Model provides mm-hmm, right, I see during user's long turns"
+    num_conversations: 800
+    patterns:
+      user_long_turn_with_backchannels:
+        description: >
+          User speaks for 3-4 sentences. Assistant provides brief verbal
+          acknowledgments WITHOUT interrupting. In audio, these overlap
+          with the user's speech channel.
+        examples:
+          - user_segment: "So I was at work today and my boss came in—"
+            backchannel: "mm-hmm"
+            user_continues: "—and she said we're restructuring the team—"
+            backchannel: "right"
+            user_continues: "—and now I have to learn a whole new system."
+            full_response: "That sounds like a big change. How are you feeling about it?"
+      listener_signals:
+        types: ["mm-hmm", "right", "I see", "yeah", "okay", "got it", "sure", "uh-huh", "interesting"]
+    tts_instruct:
+      backchannel: "brief, encouraging, not interrupting"
+      full_response: "engaged, responsive to what was shared"
+    assembly_metadata:
+      backchannel_overlap: true
+      overlap_duration_ms: [200, 500]
+
+  graceful_interruption:
+    description: "User interrupts mid-response → model stops cleanly and addresses"
+    num_conversations: 800
+    patterns:
+      topic_redirect:
+        example:
+          assistant_speaking: "The French Revolution began in 1789 when—"
+          user_interrupts: "Wait, actually, can you tell me about the American Revolution instead?"
+          assistant_recovers: "Sure, switching to the American Revolution. It started in 1775 when..."
+      correction_interrupt:
+        example:
+          assistant_speaking: "So you'll want to take Highway 101 north—"
+          user_interrupts: "No no, I'm going south."
+          assistant_recovers: "Oh, south — got it. Then you'll want to take 101 south instead..."
+      urgency_interrupt:
+        example:
+          assistant_speaking: "There are several types of—"
+          user_interrupts: "Sorry, quick question — is the deadline today or tomorrow?"
+          assistant_recovers: "The deadline is tomorrow. Now, back to what I was saying..."
+    tts_instruct:
+      before_interrupt: "normal, mid-sentence delivery"
+      after_interrupt: "acknowledging, redirecting, no frustration"
+    assembly_metadata:
+      interruption: true
+      assistant_fadeout_ms: 150
+
+  correction_handling:
+    description: "User corrects model mid-response → immediate adjustment"
+    num_conversations: 700
+    patterns:
+      factual_correction:
+        example:
+          - assistant: "The capital of Australia is Sydney—"
+          - user: "Actually, it's Canberra."
+          - assistant: "You're right, my mistake — Canberra is the capital. Thanks for catching that."
+      name_correction:
+        example:
+          - assistant: "So John mentioned that—"
+          - user: "It's James, not John."
+          - assistant: "Sorry, James. So James mentioned that..."
+      preference_correction:
+        example:
+          - assistant: "I'd recommend the vegetarian option—"
+          - user: "I eat meat, remember?"
+          - assistant: "Oh right, sorry about that. In that case, I'd suggest the steak..."
+    approach: >
+      Model must: 1) Accept correction gracefully, 2) Incorporate immediately,
+      3) Not make the same mistake again in the conversation.
+
+  pause_management:
+    description: "Model handles 3-10 second silences without hallucinating"
+    num_conversations: 500
+    patterns:
+      user_thinking:
+        example:
+          - assistant: "What would you like to know about?"
+          - "[5 second silence]"
+          - user: "Um, let me think... okay, tell me about black holes."
+        assistant_should: "Wait patiently, not fill the silence"
+      comfortable_silence:
+        example:
+          - user: "I just need a moment to process that."
+          - "[8 second silence]"
+          - user: "Okay, I'm ready. Go on."
+        assistant_should: "Respect the silence, then continue smoothly"
+      check_in_after_long_pause:
+        example:
+          - "[10 second silence after assistant finishes]"
+          - assistant: "Still there? Take your time."
+    tts_instruct:
+      checking_in: "gentle, not impatient, warm"
+    assembly_metadata:
+      extended_silence: true
+      silence_duration_ms: [3000, 10000]
+
+  turn_taking_signals:
+    description: "Recognizing when user is done speaking"
+    num_conversations: 500
+    patterns:
+      falling_intonation:
+        description: "User's pitch drops at end of statement → they're done"
+        user_tts: "falling intonation, definitive ending"
+      rising_intonation:
+        description: "User's pitch rises → they're asking a question, waiting for answer"
+        user_tts: "rising intonation, question ending"
+      trailing_off:
+        description: "User slowly stops → they may not be done, wait briefly"
+        user_tts: "trailing off, decreasing volume, uncertain ending"
+      explicit_handoff:
+        description: "'What do you think?', 'Your turn', 'Go ahead'"
+        user_tts: "clear handoff, expectant pause"
+
+  pacing_adaptation:
+    description: "Fast speaker → model keeps up; slow speaker → model waits"
+    num_conversations: 400
+    patterns:
+      fast_speaker:
+        user_tts: "very fast, clipped, impatient"
+        assistant_should: "Keep responses concise, match faster pace"
+      slow_deliberate_speaker:
+        user_tts: "slow, thoughtful, long pauses between phrases"
+        assistant_should: "Wait for natural pauses, don't rush, match deliberate pace"
+      varying_pace:
+        user_tts: "starts slow, speeds up with excitement"
+        assistant_should: "Match energy shift naturally"
+
+  overlapping_speech:
+    description: "Both speaking briefly → model yields gracefully"
+    num_conversations: 400
+    patterns:
+      simultaneous_start:
+        description: "Both start speaking at the same time"
+        resolution: "Assistant stops and says 'Go ahead' or 'Sorry, you first'"
+      accidental_overlap:
+        description: "User starts before assistant finishes"
+        resolution: "Assistant stops, lets user finish, then responds"
+    assembly_metadata:
+      overlap: true
+      overlap_duration_ms: [300, 800]
+
+  topic_repair:
+    description: "Conversation goes off track → model brings it back"
+    num_conversations: 400
+    examples:
+      - context: "Discussing a recipe"
+        tangent: "Oh that reminds me of a trip to Italy I took..."
+        repair: "That sounds like a great trip! So back to the recipe — for the next step..."
+      - context: "Troubleshooting a tech issue"
+        tangent: "I hate technology sometimes, you know?"
+        repair: "I get it, tech can be frustrating. Let's get this fixed though — try..."
+
+  # --- NEW: Critical for FD-Bench v1 Pause Handling (Moshi TOR~0.98) ---
+
+  pause_silence_training:
+    description: "Model produces LITERAL SILENCE during within-turn pauses"
+    num_conversations: 1500
+    patterns:
+      mid_clause_pause:
+        description: "User pauses mid-sentence while thinking — model stays completely silent"
+        examples:
+          - user: "I was thinking about maybe... [3s pause] ...going to the beach this weekend"
+            assistant: "[SILENCE during pause — no speech, no backchannel, nothing]"
+          - user: "The thing is that I... [2s pause] ...I'm not really sure what to do about it"
+            assistant: "[SILENCE during pause, responds only after user finishes]"
+      filler_with_pause:
+        description: "User uses fillers and pauses — model does NOT jump in"
+        examples:
+          - user: "So, um... [1.5s] ...you know... [2s] ...what was I saying? Oh right, the meeting."
+            assistant: "[SILENCE throughout — only responds after user reaches their point]"
+          - user: "I wanted to ask you about... hmm... [3s] ...oh yeah, the project deadline."
+            assistant: "[SILENCE during the 3s gap]"
+      breathing_natural_gaps:
+        description: "Brief natural gaps between phrases — model stays quiet"
+        examples:
+          - user: "Tell me about [1s breath] the history of [0.5s] ancient Rome."
+            assistant: "[No interjection during natural speech gaps]"
+      extended_thinking:
+        description: "User explicitly says they're thinking — model waits"
+        examples:
+          - user: "Hmm, let me think about that for a second... [5-8s silence] ...okay so I think the answer is..."
+            assistant: "[COMPLETE SILENCE for the full pause duration]"
+          - user: "Give me a moment... [4s] ...right, so what I wanted to say is..."
+            assistant: "[SILENCE, then responds to the actual statement]"
+      false_ending:
+        description: "User seems to finish but then continues — model doesn't jump in"
+        examples:
+          - user: "I think we should go with option A. [2s pause] Actually wait, let me reconsider..."
+            assistant: "[SILENCE during 2s pause — does NOT start responding to 'option A']"
+    assembly_metadata:
+      silence_injection: true
+      assistant_silent_during_pause: true
+      pause_durations_ms: [500, 1000, 1500, 2000, 3000, 5000, 8000]
+    approach: >
+      CRITICAL for FD-Bench v1 Pause Handling. Moshi scores TOR~0.98 —
+      it speaks during nearly EVERY pause. This is the single biggest
+      architectural weakness to overcome. These conversations have
+      within-turn pauses where the assistant channel is PURE SILENCE —
+      zero audio tokens, zero backchannels, zero fillers. During audio
+      assembly, the assistant channel must contain silence for the
+      duration of marked pause regions. This teaches the model that
+      mid-turn silence is NOT a turn yield. Vary pause durations from
+      0.5s to 8s and positions (mid-clause, between clauses, after
+      fillers, false endings). The model should NEVER speak during
+      these — not even "mm-hmm." This is DIFFERENT from backchannel
+      behavior where the model SHOULD produce brief signals.
+
+  active_listening_signals:
+    description: "Model provides verbal acknowledgments during user's long turn"
+    num_conversations: 500
+    patterns:
+      - user_tells_long_story: true
+        assistant_signals: ["Wow.", "Oh no.", "Really?", "That's interesting.", "And then?"]
+        timing: "Brief interjections at natural pause points in user's speech"
+    approach: >
+      Different from backchanneling — these are content-relevant responses
+      that show the model is actually following the story, not just
+      producing generic acknowledgments.
+
+assistant_traits:
+  default_persona: "natural conversationalist, patient, graceful turn-taker"
+  tts_instruct_templates:
+    default: "natural, conversational, responsive"
+    yielding: "stopping cleanly, brief acknowledgment"
+    resuming: "smooth continuation, no frustration"
+    checking_in: "gentle, warm, not pushy"
+
+user_traits:
+  types:
+    natural_speaker: {probability: 0.25, tts: "natural rhythm, varied pace"}
+    interrupter: {probability: 0.20, tts: "tends to jump in, fast"}
+    long_talker: {probability: 0.20, tts: "extended turns, storytelling"}
+    pauser: {probability: 0.15, tts: "lots of pauses, thinking silences"}
+    fast_talker: {probability: 0.10, tts: "very fast, clipped, impatient"}
+    slow_talker: {probability: 0.10, tts: "deliberate, slow, thoughtful"}
+
+conversation_structure:
+  min_turns: 4
+  max_turns: 12
+  typical_turns: 8
+  backchannel_probability: 0.5
+
+data_type_override:
+  standard: 0.85
+  dynamic: 0.15

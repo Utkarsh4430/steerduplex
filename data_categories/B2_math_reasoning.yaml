@@ -1,0 +1,117 @@
+# B2: Mathematical Reasoning
+# Target: ~4K conversations, ~100 hours
+# Targets: Spoken-MQA, Big Bench Audio, URO-Bench
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations involving mathematical reasoning through speech. Speech LLMs
+  struggle with arithmetic due to absence of symbolic notation. This data trains
+  the model to reason about numbers through natural speech. Brief mental math
+  narration IS natural ("347 minus 200 is 147, plus 11, so 158") — keep it
+  to one line per computation step. For word problems, the model should
+  identify the key relationship concisely, compute, then give the answer.
+  Never produce paragraph-length working. If the user wants more detail,
+  they'll ask "how did you get that?"
+
+categories:
+  mental_arithmetic:
+    description: "Basic and intermediate arithmetic spoken aloud"
+    num_conversations: 800
+    difficulty_levels:
+      easy: ["What's 17 plus 38?", "What's 9 times 7?", "Half of 246?"]
+      medium: ["What's 347 minus 189?", "15 percent of 680?", "What's 12 squared?"]
+      hard: ["What's 1,247 plus 3,896?", "What's 23 times 47?", "Cube root of 27,000?"]
+    approach: >
+      Assistant must think aloud: "Let me work through this. 347 minus 189...
+      347 minus 200 is 147, plus 11 is 158." This trains step-by-step
+      arithmetic reasoning in speech form.
+
+  word_problems:
+    description: "Classic story problems requiring setup, equation, solution"
+    num_conversations: 800
+    topics:
+      - distance_speed_time: "A car drives 240 miles at 60 mph. How long is the trip?"
+      - work_rate: "If 3 painters can paint a room in 6 hours, how long for 2 painters?"
+      - mixture: "You mix 2L of 30% solution with 3L of 50% solution. What's the concentration?"
+      - age_problems: "Maria is twice as old as John. In 5 years, she'll be 1.5 times his age. How old are they?"
+      - profit_loss: "I bought something for $80, sold it for $100. What's my profit percentage?"
+      - ratio_proportion: "If 5 workers build 3 walls in 4 days, how many walls can 10 workers build in 6 days?"
+
+  multi_step_math:
+    description: "Problems requiring 3+ sequential operations"
+    num_conversations: 600
+    examples:
+      - "I have $500. I spend 20% on food, 30% of the remainder on rent, and save the rest. How much do I save?"
+      - "A rectangle's length is 3 times its width. The perimeter is 48cm. What's the area?"
+      - "Train A goes 60mph, Train B goes 80mph in the opposite direction. They're 350 miles apart. When do they meet?"
+
+  estimation_approximation:
+    description: "Fermi questions, order-of-magnitude reasoning"
+    num_conversations: 500
+    examples:
+      - "How many piano tuners are there in Chicago?"
+      - "How many golf balls fit in a school bus?"
+      - "If you stacked all humans on top of each other, how high would the pile reach?"
+      - "Roughly how many words does an average person speak in a lifetime?"
+    approach: >
+      The key skill is breaking down an impossible question into estimable parts.
+      Assistant should reason: "Well, Chicago has about 2.7 million people..."
+
+  statistical_reasoning:
+    description: "Probability, averages, percentages in conversation"
+    num_conversations: 400
+    examples:
+      - "If I flip a coin 3 times, what's the probability of getting exactly 2 heads?"
+      - "The average of 5 numbers is 20. If I remove a number and the average drops to 18, what number did I remove?"
+      - "A test has a 95% accuracy rate. If 1 in 1000 people have the condition, and I test positive, what's the actual chance I have it?"
+
+  unit_conversion:
+    description: "Real-world unit problems"
+    num_conversations: 400
+    examples:
+      - "Convert 72 degrees Fahrenheit to Celsius."
+      - "How many kilometers is a marathon in miles? A marathon is 26.2 miles."
+      - "If I'm driving at 100 km/h, what's that in meters per second?"
+      - "A recipe calls for 2 cups of flour. How many tablespoons is that?"
+
+  number_theory_puzzles:
+    description: "Primes, divisibility, sequences"
+    num_conversations: 200
+    examples:
+      - "What's the next prime after 97?"
+      - "What's the pattern: 1, 1, 2, 3, 5, 8, ...?"
+      - "Is 144 a perfect square? What about 200?"
+      - "What's the smallest number divisible by both 12 and 18?"
+
+  financial_math:
+    description: "Interest, tips, discounts, budgeting"
+    num_conversations: 300
+    examples:
+      - "If I invest $10,000 at 7% annual interest compounded yearly, what do I have after 5 years?"
+      - "The bill is $86.50. I want to leave a 20% tip. What's the total?"
+      - "A $200 item is 30% off, then I have a 10% coupon on top. What's the final price?"
+
+assistant_traits:
+  default_persona: "patient math tutor, thinks aloud, checks work"
+  tts_instruct_templates:
+    default: "clear, steady pace, enunciating numbers carefully"
+    working: "thinking aloud, natural calculation pauses"
+    explaining: "patient, step-by-step, encouraging"
+
+user_traits:
+  types:
+    student: {probability: 0.35, tts: "curious, sometimes confused, asking for help"}
+    quiz_giver: {probability: 0.25, tts: "confident, testing, rapid-fire"}
+    practical_asker: {probability: 0.25, tts: "casual, real-world context"}
+    challenger: {probability: 0.15, tts: "skeptical, double-checking answers"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
+  backchannel_probability: 0.2
+
+data_type_override:
+  standard: 0.80
+  long_form: 0.10
+  dynamic: 0.10

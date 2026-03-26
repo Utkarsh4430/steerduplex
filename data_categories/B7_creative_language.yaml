@@ -1,0 +1,119 @@
+# B7: Creative Language & Generation
+# Target: ~3K conversations, ~60 hours
+# Targets: VocalBench (creativity), WildSpeech-Bench (text creation), VoiceAssistant-Eval
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations requiring creative language generation through speech —
+  storytelling, poetry, wordplay, debate, and improvisation. Tests
+  the model's ability to be entertaining and engaging, not just informative.
+
+categories:
+  storytelling:
+    description: "Collaborative fiction, bedtime stories, campfire tales"
+    num_conversations: 600
+    types:
+      bedtime_story: "Tell me a bedtime story about a brave little fox."
+      collaborative: "Let's build a story together. I'll start: 'The door creaked open...'"
+      campfire: "Tell me a spooky story."
+      fairy_tale: "Make up a fairy tale with a twist ending."
+      personal_narrative: "Tell me about a time you learned something new. Make it up but make it feel real."
+    tts_instruct_variants:
+      narrating: "storytelling voice, varied pace, dramatic pauses"
+      suspense: "building tension, slower, lower pitch"
+      whimsical: "playful, animated, character voices"
+
+  poetry_verse:
+    description: "Limerick, haiku, sonnet, free verse — with rhythm"
+    num_conversations: 400
+    forms:
+      limerick: "Write me a limerick about a programmer."
+      haiku: "Give me a haiku about autumn."
+      rhyming_couplets: "Write a short poem about the ocean with rhyming couplets."
+      free_verse: "Write a free verse poem about loneliness."
+      acrostic: "Write an acrostic poem using the word HAPPY."
+    tts_instruct: "rhythmic, measured pace, natural pauses between lines, poetic cadence"
+
+  wordplay_puns:
+    description: "Jokes, riddles, tongue twisters, word games"
+    num_conversations: 400
+    types:
+      puns: "Give me a pun about bread."
+      riddles: "Tell me a riddle and let me guess."
+      word_games: "Let's play a word association game."
+      tongue_twisters: "Make up a new tongue twister about cooking."
+      dad_jokes: "Hit me with your best dad joke."
+      definitions_game: "I'll give you a made-up word, you define it."
+    tts_instruct: "playful, comedic timing, natural delivery"
+
+  debate_argumentation:
+    description: "Structured argument, devil's advocate, Socratic dialogue"
+    num_conversations: 500
+    formats:
+      devils_advocate: "Argue the opposite of whatever I say."
+      structured_debate: "Let's debate whether social media is good or bad. You go first."
+      socratic: "I think democracy is the best form of government. Challenge me."
+      point_counterpoint: "Give me the strongest argument for and against vegetarianism."
+      philosophical: "Is it ever okay to lie? Defend your position."
+    tts_instruct: "articulate, persuasive, measured, emphasizing key points"
+
+  analogies_metaphors:
+    description: "Explain X using a metaphor from Y"
+    num_conversations: 300
+    examples:
+      - "Explain how the immune system works using a castle defense metaphor."
+      - "Describe machine learning as if it were cooking."
+      - "Explain gravity using a trampoline analogy."
+      - "Compare running a business to coaching a sports team."
+
+  improvisation:
+    description: "Yes-and building, collaborative brainstorming, riffing"
+    num_conversations: 300
+    types:
+      yes_and: "Let's do improv. I'll start a scene, you build on it."
+      brainstorm: "Let's brainstorm 10 creative uses for a paperclip."
+      riff: "I'll say a topic, you free-associate for 30 seconds."
+      what_if: "What if dogs could talk? Let's explore this together."
+    tts_instruct: "energetic, building on ideas, enthusiastic, quick-thinking"
+
+  summary_synthesis:
+    description: "Complex topic as a story or analogy"
+    num_conversations: 300
+    examples:
+      - "Explain quantum entanglement as a love story."
+      - "Tell me about the history of the internet as an adventure narrative."
+      - "Describe evolution as a reality TV show."
+
+  song_lyrics:
+    description: "Write lyrics with rhyme scheme and rhythm"
+    num_conversations: 200
+    styles:
+      pop: "Write a catchy chorus about Monday mornings."
+      rap: "Write a verse about being a programmer."
+      country: "Write a country song about missing home."
+      lullaby: "Write a lullaby about the moon."
+    tts_instruct: "rhythmic, musical cadence, emphasis on rhymes"
+
+assistant_traits:
+  default_persona: "creative, playful, articulate, good with language"
+  tts_instruct_templates:
+    default: "engaging, varied pace, expressive"
+    creative: "animated, playful, natural rhythm"
+    dramatic: "building tension, varied volume, emotional"
+
+user_traits:
+  types:
+    creative_partner: {probability: 0.30, tts: "enthusiastic, building together, playful"}
+    requestor: {probability: 0.30, tts: "casual, wanting entertainment"}
+    challenger: {probability: 0.20, tts: "competitive, pushing for better"}
+    appreciator: {probability: 0.20, tts: "enjoying, encouraging, positive"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 10
+  typical_turns: 6
+  backchannel_probability: 0.3
+
+data_type_override:
+  standard: 0.80
+  long_form: 0.20

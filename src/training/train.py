@@ -28,6 +28,7 @@ import os
 import pprint
 import shutil
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 
 import fire
@@ -42,6 +43,23 @@ from finetune.args import TrainArgs
 from finetune.checkpointing import Checkpointer
 from finetune.data.data_loader import build_data_loader
 from finetune.data.interleaver import InterleavedTokenizer, Interleaver
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: inject start_sec into text_conditions so loss masking can
+# adjust prompt_end_sec for chunks that start after the prompt region.
+# Without this, chunks 1+ of long files incorrectly mask the first 5.7s.
+# ---------------------------------------------------------------------------
+_orig_tokenizer_call = InterleavedTokenizer.__call__
+
+
+def _patched_tokenizer_call(self, wav, start_sec, path):
+    sample = _orig_tokenizer_call(self, wav, start_sec, path)
+    if sample.condition_attributes is not None and isinstance(sample.condition_attributes, dict):
+        sample.condition_attributes["_start_sec"] = str(start_sec)
+    return sample
+
+
+InterleavedTokenizer.__call__ = _patched_tokenizer_call
 from finetune.distributed import (
     BACKEND,
     avg_aggregate,
@@ -88,7 +106,46 @@ def _load_custom_config(config_path: str) -> dict:
     """Load custom SteerDuplex config fields from the 'steerduplex' section."""
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
-    return cfg.get("steerduplex", {})
+    custom = dict(cfg.get("steerduplex", {}))
+    # Carry the datasets section so we can auto-compute max_steps
+    custom["_datasets"] = cfg.get("datasets", {})
+    return custom
+
+
+def _compute_max_steps(
+    custom: dict,
+    batch_size: int,
+    world_size: int,
+    duration_sec: float,
+) -> int | None:
+    """Auto-compute max_steps from num_epochs + dataset hours.
+
+    Returns computed max_steps, or None if num_epochs is not set.
+    """
+    num_epochs = custom.get("num_epochs")
+    if num_epochs is None:
+        return None
+
+    datasets = custom.get("_datasets", {})
+    total_hours = 0.0
+    for name, ds in datasets.items():
+        if not ds.get("enabled", False):
+            continue
+        ds_hours = ds.get("total_hours", 0)
+        max_hours_raw = ds.get("max_hours", "all")
+        if max_hours_raw != "all":
+            ds_hours = min(ds_hours, float(max_hours_raw))
+        total_hours += ds_hours
+
+    if total_hours <= 0:
+        return None
+
+    total_samples = total_hours * 3600 / duration_sec
+    effective_batch = batch_size * world_size
+    steps_per_epoch = math.ceil(total_samples / effective_batch)
+    max_steps = steps_per_epoch * num_epochs
+
+    return max_steps
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +155,9 @@ def _load_custom_config(config_path: str) -> dict:
 def _get_prompt_end_frames(batch) -> list[int]:
     """Extract prompt_end_sec from batch condition_attributes and convert to frame indices.
 
-    moshi-finetune's InterleavedTokenizer passes text_conditions as a raw dict
-    (not a ConditionAttributes object). This function handles both cases.
+    Handles chunked long audio: if the chunk starts after the prompt region
+    (start_sec > prompt_end_sec), prompt_end is set to 0 (no masking).
+    This prevents incorrectly masking conversation audio in later chunks.
     """
     prompt_end_frames = []
     batch_size = batch.codes.shape[0]
@@ -107,22 +165,35 @@ def _get_prompt_end_frames(batch) -> list[int]:
     if batch.condition_attributes is not None:
         for attr in batch.condition_attributes:
             prompt_end_sec = 0.0
+            start_sec = 0.0
             if isinstance(attr, dict):
-                # Raw dict from JSON — moshi-finetune passes text_conditions as dict
                 val = attr.get("prompt_end_sec")
                 if val is not None:
                     try:
                         prompt_end_sec = float(val)
                     except (ValueError, TypeError):
                         pass
+                # _start_sec injected by monkey-patch above
+                sval = attr.get("_start_sec")
+                if sval is not None:
+                    try:
+                        start_sec = float(sval)
+                    except (ValueError, TypeError):
+                        pass
             elif hasattr(attr, 'text') and attr.text:
-                # ConditionAttributes object (future-proofing)
                 val = attr.text.get("prompt_end_sec")
                 if val is not None:
                     try:
                         prompt_end_sec = float(val)
                     except (ValueError, TypeError):
                         pass
+
+            # Adjust for chunk offset: if chunk starts after prompt, no masking
+            if start_sec >= prompt_end_sec:
+                prompt_end_sec = 0.0
+            else:
+                prompt_end_sec = max(0.0, prompt_end_sec - start_sec)
+
             prompt_end_frames.append(seconds_to_frames(prompt_end_sec))
     else:
         prompt_end_frames = [0] * batch_size
@@ -228,11 +299,8 @@ def evaluate_with_prompt_mask(model, data_loader, state, args):
 
     total_loss = 0.0
     num_samples = 0
-    max_samples = 40 // max(get_world_size(), 1)
 
     for batch in data_loader:
-        if num_samples >= max_samples:
-            break
 
         codes = batch.codes
         condition_tensors = None
@@ -262,11 +330,18 @@ def evaluate_with_prompt_mask(model, data_loader, state, args):
         total_loss += (text_loss + audio_loss).item()
         num_samples += 1
 
-    avg_loss = total_loss / max(num_samples, 1)
-    avg_loss = avg_aggregate(avg_loss)
-
-    state.this_eval_loss = avg_loss
-    state.this_eval_perplexity = math.exp(avg_loss) if avg_loss < 20 else float("inf")
+    if num_samples == 0:
+        logger.warning(
+            "Eval data loader yielded 0 batches — iterator may be exhausted. "
+            "Reporting NaN eval loss."
+        )
+        state.this_eval_loss = float("nan")
+        state.this_eval_perplexity = float("nan")
+    else:
+        avg_loss = total_loss / num_samples
+        avg_loss = avg_aggregate(avg_loss)
+        state.this_eval_loss = avg_loss
+        state.this_eval_perplexity = math.exp(avg_loss) if avg_loss < 20 else float("inf")
 
     model.train()
 
@@ -334,6 +409,38 @@ def _train(args: TrainArgs, custom: dict, exit_stack: ExitStack):
             "PyTorch environment is not correctly initialized. "
             "This message should only be displayed when testing."
         )
+
+    # Auto-compute max_steps from num_epochs if configured
+    computed_steps = _compute_max_steps(
+        custom,
+        batch_size=args.batch_size,
+        world_size=get_world_size(),
+        duration_sec=args.duration_sec,
+    )
+    if computed_steps is not None:
+        datasets_cfg = custom.get("_datasets", {})
+        total_hours = sum(
+            min(ds.get("total_hours", 0), float(ds["max_hours"]) if ds.get("max_hours") != "all" else ds.get("total_hours", 0))
+            for ds in datasets_cfg.values()
+            if ds.get("enabled", False)
+        )
+        steps_per_epoch = math.ceil(total_hours * 3600 / args.duration_sec / (args.batch_size * get_world_size()))
+        main_logger_info(
+            f"Auto max_steps: {total_hours:.0f}h data, "
+            f"{args.duration_sec}s chunks, batch {args.batch_size}×{get_world_size()} GPUs "
+            f"→ {steps_per_epoch} steps/epoch × {custom['num_epochs']} epochs "
+            f"= {computed_steps} steps"
+        )
+        args.max_steps = computed_steps
+
+    # Build unique run_dir and wandb run_name from steerduplex.run_name + timestamp
+    run_name = custom.get("run_name")
+    if run_name is not None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        full_name = f"{run_name}_{timestamp}"
+        args.run_dir = str(Path(args.run_dir) / full_name)
+        if args.wandb is not None:
+            args.wandb.run_name = full_name
 
     # Init run dir with resume detection
     main_logger_info(f"Run dir: {args.run_dir}")
@@ -441,8 +548,10 @@ def _train(args: TrainArgs, custom: dict, exit_stack: ExitStack):
         is_eval=False,
     )
 
-    if args.do_eval:
-        eval_data_loader = build_data_loader(
+    # NOTE: eval data loader is a one-shot generator (moshi-finetune upstream bug).
+    # We must recreate it before every eval call. See _build_eval_loader() below.
+    def _build_eval_loader():
+        return build_data_loader(
             instruct_tokenizer=interleaved_tokenizer,
             args=args.data,
             batch_size=args.batch_size,
@@ -493,8 +602,11 @@ def _train(args: TrainArgs, custom: dict, exit_stack: ExitStack):
 
     state = TrainState(args.max_steps)
 
-    # Checkpointer
+    # Checkpointer — num_ckpt_keep=null in config means save ALL checkpoints
+    # (post-hoc benchmark selection, following PersonaPlex/Moshi methodology)
     if args.do_ckpt:
+        if args.num_ckpt_keep is None:
+            main_logger_info("num_ckpt_keep=null → saving ALL checkpoints")
         checkpointer = Checkpointer(
             model=model,
             state=state,
@@ -610,7 +722,7 @@ def _train(args: TrainArgs, custom: dict, exit_stack: ExitStack):
         if args.do_eval and (
             (args.eval_freq > 0 and state.step % args.eval_freq == 0) or is_last_step
         ):
-            evaluate_with_prompt_mask(model, eval_data_loader, state, args)
+            evaluate_with_prompt_mask(model, _build_eval_loader(), state, args)
 
             eval_logs = get_eval_logs(
                 state.step, avg_loss,

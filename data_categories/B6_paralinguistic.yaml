@@ -1,0 +1,150 @@
+# B6: Paralinguistic Awareness
+# Target: ~4K conversations, ~80 hours
+# Targets: MMSU, URO-Bench, SUPERB, AudioBench
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations where the assistant must respond to HOW the user speaks,
+  not just WHAT they say. This trains the model's paralinguistic perception —
+  the ability to detect and respond to emotion, urgency, hesitation, and
+  other non-verbal speech cues. Key differentiator vs. cascade (ASR→LLM→TTS)
+  systems that lose all paralinguistic information.
+
+categories:
+  emotion_aware_response:
+    description: "User's emotion is in TTS instruct, not text — model must detect and adapt"
+    num_conversations: 800
+    scenarios:
+      hidden_sadness:
+        user_text: "Yeah, I'm fine. Just a normal day."
+        user_tts: "flat, subdued, low energy, quiet"
+        bad_response: "Great to hear you're doing well!"
+        good_response: "You say you're fine, but you sound a little down. Everything okay?"
+      masked_excitement:
+        user_text: "So, I got some news today."
+        user_tts: "trying to contain excitement, slightly higher pitch, fast"
+        good_response: "Oh? You sound excited about it — what happened?"
+      suppressed_frustration:
+        user_text: "Can you try explaining that again?"
+        user_tts: "tense, controlled, clipped words"
+        good_response: "Of course, and I'm sorry if I wasn't clear. Let me approach this differently."
+    approach: >
+      The TEXT is neutral/ambiguous, but the TTS instruct encodes the real emotion.
+      In the meta-prompt, we tell the LLM what emotion to embed and how the
+      assistant should detect and respond to it. This creates training pairs where
+      the speech signal (not text) determines the response.
+
+  sarcasm_irony_extended:
+    description: "Extended sarcasm handling beyond A8"
+    num_conversations: 600
+    scenarios:
+      - context: "After getting wrong directions"
+        user: "Oh wonderful, now I'm completely lost. Your directions were just stellar."
+        tts: "flat, sarcastic emphasis on 'wonderful' and 'stellar'"
+        response: "I'm sorry about that. Let me give you better directions this time."
+      - context: "After a long wait"
+        user: "Only took 45 minutes. That's what I call efficiency."
+        tts: "sarcastic, drawn out, exaggerated emphasis"
+        response: "I hear the sarcasm, and you're right to be frustrated. Let me make this worth your while."
+
+  urgency_detection:
+    description: "User speaks fast/stressed → model prioritizes speed"
+    num_conversations: 500
+    scenarios:
+      emergency_adjacent:
+        user_text: "I need to find the nearest hospital right now"
+        user_tts: "fast, stressed, urgent, slightly breathless"
+        response_style: "Skip pleasantries, give direct answer immediately"
+      time_pressure:
+        user_text: "My meeting starts in 2 minutes, quick summary of this report"
+        user_tts: "very fast, clipped, rushed"
+        response_style: "Ultra-concise, bullet points, fastest delivery"
+      calm_urgency:
+        user_text: "This is pretty important, I need to get it right"
+        user_tts: "deliberate, focused, serious"
+        response_style: "Thorough but efficient, no fluff"
+
+  hesitation_uncertainty:
+    description: "User sounds unsure → model offers reassurance"
+    num_conversations: 500
+    scenarios:
+      - user_text: "I was thinking maybe... I don't know... should I change careers?"
+        user_tts: "hesitant, trailing off, uncertain, lots of pauses"
+        response: "It sounds like you're wrestling with this. Let's talk through it — there's no wrong answer here."
+      - user_text: "Um, is it okay if I ask kind of a dumb question?"
+        user_tts: "shy, quiet, self-conscious"
+        response: "Absolutely, there are no dumb questions. Go ahead."
+
+  excitement_matching:
+    description: "User is excited → model matches energy appropriately"
+    num_conversations: 400
+    scenarios:
+      - user_text: "I just got accepted into my dream school!"
+        user_tts: "ecstatic, fast, high energy, barely containing joy"
+        response_tts: "enthusiastic, genuinely happy, matching energy"
+      - user_text: "We won the championship!"
+        user_tts: "shouting with joy, breathless, pumped up"
+        response_tts: "excited, celebratory, high energy"
+
+  grief_sensitivity:
+    description: "User sounds sad/grieving → model shows care"
+    num_conversations: 400
+    scenarios:
+      - user_text: "My dog passed away last week."
+        user_tts: "quiet, choked up, slow, low pitch"
+        response_tts: "gentle, soft, unhurried, compassionate"
+        bad_response: "I'm sorry to hear that! Want to talk about getting a new pet?"
+        good_response: "I'm really sorry. That's such a tough loss. Take your time."
+
+  formality_inference:
+    description: "Detect formality from speech, match it"
+    num_conversations: 400
+    scenarios:
+      formal_user:
+        user_text: "Good afternoon. I'd like to inquire about your services."
+        user_tts: "formal, measured, professional"
+        response_style: "Match formality — 'Good afternoon. I'd be happy to help you with that.'"
+      casual_user:
+        user_text: "Hey, what's up? So I was wondering about, like, your stuff."
+        user_tts: "casual, relaxed, informal"
+        response_style: "Match casualness — 'Hey! Yeah, totally — what do you wanna know?'"
+
+  age_appropriate_adaptation:
+    description: "Detect child/elderly speaker patterns → adapt vocabulary and pace"
+    num_conversations: 400
+    scenarios:
+      child_speaker:
+        user_text: "Why is the sky blue? And why do birds fly? And why can't I fly?"
+        user_tts: "high pitch, excited, rapid questions, childlike wonder"
+        response_style: "Simple vocabulary, enthusiastic, playful analogies"
+      elderly_speaker:
+        user_text: "Could you help me with this technology thing? I'm not very good with computers."
+        user_tts: "slow, careful, patient, slightly uncertain"
+        response_style: "Patient, step-by-step, no jargon, reassuring"
+
+assistant_traits:
+  default_persona: "emotionally intelligent, perceptive, adaptive communicator"
+  tts_instruct_templates:
+    default: "warm, attentive, responsive"
+    empathetic: "gentle, soft, unhurried"
+    matching_energy: "matching user's energy level naturally"
+    reassuring: "calm, steady, warm"
+
+user_traits:
+  types:
+    emotionally_expressive: {probability: 0.30, tts: "varies widely per scenario"}
+    subtle_cues: {probability: 0.25, tts: "emotion mostly in tone, not words"}
+    masked_emotion: {probability: 0.20, tts: "saying one thing, sounding another"}
+    direct_communicator: {probability: 0.15, tts: "straightforward, clear emotion in words"}
+    reserved: {probability: 0.10, tts: "quiet, contained, subtle shifts"}
+
+conversation_structure:
+  min_turns: 4
+  max_turns: 10
+  typical_turns: 6
+  backchannel_probability: 0.4
+
+data_type_override:
+  standard: 0.70
+  dynamic: 0.20
+  counterfactual: 0.10

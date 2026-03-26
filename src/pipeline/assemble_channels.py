@@ -119,6 +119,12 @@ def assemble_conversation(
     user_track = np.zeros(max_samples, dtype=np.float32)
     assistant_track[:prompt_len] = prompt_audio
 
+    # Fill user channel with 440 Hz sine during system prompt region
+    # (PersonaPlex pattern — stable conditioning signal that tells the model
+    # "we're in prompt mode, don't start responding yet")
+    user_sine = generate_sine(440.0, prompt_len / sample_rate, sample_rate)
+    user_track[:prompt_len] = user_sine[:prompt_len]
+
     cursor = prompt_len
     turn_timestamps = []
 
@@ -217,6 +223,7 @@ def assemble_conversation(
         "num_turns": len(turn_timestamps),
         "turn_timestamps": turn_timestamps,
         "system_prompt": transcript.get("system_prompt", ""),
+        "system_prompt_rephrased": transcript.get("system_prompt_rephrased", ""),
         "assistant_voice_id": transcript.get("assistant_voice", {}).get("id", ""),
         "user_voice_id": transcript.get("user_voice", {}).get("id", ""),
     }
@@ -268,10 +275,6 @@ def main():
         for synth_path in tqdm(remaining, desc=cat_dir.name):
             transcript = load_json(synth_path)
             conv_id = transcript.get("id", synth_path.stem)
-
-            if not transcript.get("quality_passed", True):
-                failed += 1
-                continue
 
             meta_path = output_dir / f"{conv_id}_meta.json"
             if is_done(meta_path):

@@ -1,0 +1,187 @@
+# B10: Speech-Specific Understanding
+# Target: ~3K conversations, ~65 hours
+# Targets: MMSU (phonetics, prosody), WildSpeech-Bench, MMAR, Audio MultiChallenge (Audio-Cue)
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations requiring capabilities ONLY a speech-native model can have —
+  phonetic awareness, prosody interpretation, pronunciation guidance, and
+  sound-related understanding. These differentiate us from cascade ASR→LLM→TTS
+  systems that process text intermediates and lose all acoustic information.
+
+categories:
+  homophone_disambiguation:
+    description: "Context-dependent interpretation of words that sound the same"
+    num_conversations: 500
+    examples:
+      - sentence: "I need to book a book about cooking"
+        note: "book (reserve) vs book (text)"
+      - sentence: "They're going to their house over there"
+        note: "they're vs their vs there"
+      - sentence: "The bass player caught a bass at the lake"
+        note: "bass (instrument /beɪs/) vs bass (fish /bæs/)"
+      - sentence: "I'll read what I read yesterday"
+        note: "read (present) vs read (past)"
+      - sentence: "Can you wind the clock before the wind picks up?"
+        note: "wind (turn) vs wind (breeze)"
+      - sentence: "The dove dove into the water"
+        note: "dove (bird) vs dove (past tense of dive)"
+    approach: >
+      Conversations use homophones/heteronyms in context. Assistant must
+      demonstrate correct understanding. User sometimes asks "which meaning
+      did I use?" to verify comprehension.
+
+  phonetic_awareness:
+    description: "Rhyming, alliteration, phoneme identification"
+    num_conversations: 400
+    examples:
+      - "What words rhyme with 'orange'?" # sporange, door hinge
+      - "Give me 5 words that start with the same sound as 'phone'" # farm, fish, etc. — ph=/f/
+      - "Do 'cough' and 'through' rhyme?" # No — different -ough pronunciations
+      - "How many syllables are in 'antidisestablishmentarianism'?"
+      - "What's the vowel sound in 'blood'? Is it the same as 'food'?" # No — /ʌ/ vs /uː/
+      - "Name words where 'ch' sounds different: chair, chemistry, machine"
+    approach: >
+      Tests whether the model understands English phonology, not just
+      spelling. Critical for speech-native understanding.
+
+  pronunciation_guidance:
+    description: "How do you pronounce [word]? with breakdown"
+    num_conversations: 400
+    examples:
+      - word: "quinoa"
+        guidance: "KEEN-wah"
+      - word: "Worcestershire"
+        guidance: "WUS-ter-sher"
+      - word: "epitome"
+        guidance: "eh-PIT-uh-mee, not EH-pih-tome"
+      - word: "colonel"
+        guidance: "KER-nuhl — it's one of English's weirdest spellings"
+      - word: "açaí"
+        guidance: "ah-sah-EE"
+      - word: "Nguyen"
+        guidance: "approximately WIN or NWIN, depending on dialect"
+    approach: >
+      User asks how to pronounce difficult words. Assistant provides
+      phonetic breakdown, common mistakes, and pronounces it clearly.
+
+  prosody_interpretation:
+    description: "Meaning changes based on emphasis/stress"
+    num_conversations: 300
+    examples:
+      - sentence: "I didn't say HE stole the money"
+        meaning: "Someone else stole it"
+      - sentence: "I didn't say he STOLE the money"
+        meaning: "He did something else with it"
+      - sentence: "I didn't SAY he stole the money"
+        meaning: "I implied it, or communicated non-verbally"
+      - sentence: "I DIDN'T say he stole the money"
+        meaning: "Emphatic denial"
+    approach: >
+      Conversations exploring how emphasis changes meaning. The TTS
+      instruct for user turns specifies which word to stress.
+      Model must correctly interpret the intended meaning.
+
+  acoustic_description:
+    description: "Describing sounds, tones, and audio phenomena"
+    num_conversations: 300
+    examples:
+      - "What does a oboe sound like compared to a clarinet?"
+      - "Describe the difference between a whisper and a murmur."
+      - "What makes a voice sound 'warm' versus 'cold'?"
+      - "Explain what reverb is and when you'd hear it."
+      - "What's the difference between pitch and volume?"
+
+  code_switching:
+    description: "Mixing languages/registers naturally"
+    num_conversations: 300
+    examples:
+      - "My abuela always said 'que será, será' — can you use that in a sentence?"
+      - "In French cuisine, what does 'mise en place' actually mean?"
+      - "My German friend says 'Schadenfreude' a lot — is there an English equivalent?"
+      - "What does 'C'est la vie' mean and when would you use it?"
+    approach: >
+      Natural use of foreign phrases in English conversation.
+      Model should handle these gracefully, explaining when asked.
+
+  onomatopoeia:
+    description: "Using and understanding sound-words"
+    num_conversations: 300
+    examples:
+      - "What animal goes 'ribbit'?"
+      - "Describe a thunderstorm using only sound words."
+      - "What's the word for the sound a snake makes?"
+      - "Use onomatopoeia to describe a busy kitchen."
+      - "What does 'whoosh' describe?"
+    tts_instruct: "expressive, emphasizing sound words with appropriate delivery"
+
+  # --- NEW: Targets AudioMC Inference Memory (Audio-Cue) ---
+
+  audio_cue_memory:
+    description: "Environmental sounds and context carry meaning needed later"
+    num_conversations: 500
+    examples:
+      - context: "Cat meowing audible during user's turn"
+        user_turn_2: "Sorry about Mochi, she won't stop meowing. Anyway, about my weekend plans..."
+        filler_turns: "[discuss movies, errands, work for 3 turns]"
+        recall_turn_6: "Quick question — does Mochi need a FVRCP or DHPP vaccine?"
+        expected: "FVRCP is for cats and DHPP is for dogs. Since Mochi is a cat — you mentioned her meowing earlier — she'd need the FVRCP."
+      - context: "Rain sounds during user's turn"
+        user_turn_1: "Ugh, this weather is terrible. So about the outdoor party on Saturday..."
+        filler_turns: "[discuss food, music, guest list for 3 turns]"
+        recall_turn_5: "Do you think I need to rent a tent?"
+        expected: "Given the rain you mentioned, definitely yes — a tent would save the party if the weather doesn't clear up."
+      - context: "Baby sounds during user's turn"
+        user_turn_1: "Sorry, hold on, let me settle the baby... okay I'm back."
+        filler_turns: "[discuss work project for 4 turns]"
+        recall_turn_6: "I need a gift for my sister — she just had a baby too."
+        expected: "Since you've got a little one yourself, you probably have a good sense of what new parents need. Maybe something practical?"
+      - context: "Kitchen sounds — chopping, sizzling"
+        user_turn_1: "I'm cooking while we talk, hope that's okay. So I'm making dinner and..."
+        filler_turns: "[discuss book recommendations for 3 turns]"
+        recall_turn_5: "What dessert would go well after what I'm making?"
+        expected: "Since you're actively cooking — sounds like a stir-fry or sauté from the sizzling — something light like fruit or sorbet would pair nicely."
+      - context: "User sounds congested/sick"
+        user_turn_2: "[sniffling, hoarse voice] Sorry I sound awful, just a cold. Anyway..."
+        filler_turns: "[discuss travel plans for 3 turns]"
+        recall_turn_6: "Should I go to the gym today?"
+        expected: "You mentioned you're dealing with a cold — I'd rest today and let your body recover."
+    assembly_metadata:
+      ambient_audio_injection: true
+      sound_categories: ["animal_sounds", "weather", "baby", "kitchen", "traffic", "construction", "music"]
+    approach: >
+      Targets AudioMC Inference Memory (Audio-Cue). This is the hardest
+      subset — models score 36.5% LOWER than on semantic memory. The
+      environmental context is established through the user explicitly
+      mentioning the sound/situation. During TTS assembly, matching ambient
+      sounds are mixed into the user audio channel at low volume. The
+      critical detail is then needed 3-5 turns later for an unrelated
+      question. Start with Approach A: the transcript explicitly references
+      the sound, teaching the model to associate described environmental
+      context with semantic meaning. Include: pet sounds → pet care questions,
+      weather → outdoor planning, cooking → food questions, health sounds →
+      wellness advice, location sounds → logistics.
+
+assistant_traits:
+  default_persona: "linguistically aware, clear pronunciation, speech expert"
+  tts_instruct_templates:
+    default: "clear, articulate, natural emphasis"
+    demonstrating_pronunciation: "slow, careful, exaggerated clarity on target word"
+    discussing_sounds: "expressive, varied, demonstrative"
+
+user_traits:
+  types:
+    language_curious: {probability: 0.35, tts: "curious, asking about language"}
+    learner: {probability: 0.25, tts: "student, trying to learn pronunciation"}
+    native_speaker: {probability: 0.20, tts: "natural, testing model's knowledge"}
+    multilingual: {probability: 0.20, tts: "mixing languages naturally"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
+  backchannel_probability: 0.2
+
+data_type_override:
+  standard: 0.80
+  dynamic: 0.20

@@ -1,0 +1,141 @@
+# B1: Speech Reasoning & Logic
+# Target: ~6K conversations, ~150 hours
+# Targets: MMAU, MMSU, MMAR, Big Bench Audio, SpeechR
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations requiring logical reasoning through spoken dialogue.
+  The assistant reasons naturally — brief verbal reasoning woven into
+  conversation, NOT verbose chain-of-thought. Simple questions get direct
+  answers. Complex ones get a sentence or two: "so if X, then that means
+  Y, which gives us Z." The model reasons WITH the user interactively
+  ("does that make sense?" / "you see where I'm going?") rather than
+  monologuing. This trains the model to be genuinely capable at reasoning
+  while remaining natural and conversational to talk to.
+
+categories:
+  formal_logic:
+    description: "Syllogisms, deduction, formal fallacy detection"
+    num_conversations: 1200
+    subcategories:
+      syllogisms:
+        examples:
+          - "All mammals breathe air. Whales are mammals. Do whales breathe air?"
+          - "Some birds can fly. Penguins are birds. Can penguins fly?"
+          - "No reptiles have fur. A snake is a reptile. Does a snake have fur?"
+      deduction:
+        examples:
+          - "If it rains, the ground gets wet. The ground is wet. Did it rain?"
+          - "If John is taller than Mary, and Mary is taller than Sam, who is tallest?"
+      formal_fallacies:
+        examples:
+          - "All dogs are animals. All cats are animals. Therefore, all dogs are cats. What's wrong with this argument?"
+          - "She's successful, so she must be smart. Is that necessarily true?"
+      conditional_reasoning:
+        examples:
+          - "If A implies B, and B implies C, does A imply C?"
+          - "If it's not raining, I'll go for a walk. It's raining. Can you conclude anything about my walk?"
+
+  commonsense_reasoning:
+    description: "Everyday cause-effect, physical intuition, social norms"
+    num_conversations: 1200
+    subcategories:
+      physical_intuition:
+        examples:
+          - "What happens if you put a lit candle in a sealed jar?"
+          - "If I drop a ball and a feather in a vacuum, which hits the ground first?"
+          - "Why does ice float on water?"
+      social_reasoning:
+        examples:
+          - "Why would someone whisper in a library?"
+          - "If someone is crying at a wedding, are they likely sad or happy?"
+          - "Why might someone decline a promotion?"
+      cause_effect:
+        examples:
+          - "If you water a plant with salt water, what happens?"
+          - "What would happen to traffic if all traffic lights turned green simultaneously?"
+      temporal_reasoning:
+        examples:
+          - "I ate breakfast, then lunch, then dinner. What did I eat second?"
+          - "If Tuesday is after Monday, and today is Wednesday, what was yesterday?"
+
+  multi_step_inference:
+    description: "Chain-of-thought reasoning requiring 3+ steps"
+    num_conversations: 1000
+    examples:
+      - "A farmer has chickens and cows. He counts 30 heads and 80 legs. How many chickens does he have?"
+      - "There are 5 houses in a row. The red house is to the left of the green house. The blue house is in the middle. Where is the red house?"
+      - "If a train leaves at 3 PM going 60 mph and another leaves at 4 PM going 80 mph from the same station, when does the second catch the first?"
+    approach: >
+      The assistant reasons concisely through speech. For complex problems:
+      brief acknowledgment ("hmm, let me think..."), then 2-3 sentences of
+      key reasoning, then the answer. When the user asks "how did you get that?",
+      the model explains the KEY INSIGHT — not every step. Reasoning should be
+      interactive: "so we know there are 30 heads, right? And each cow has 4 legs
+      while chickens have 2, so..." Keep it conversational, not a lecture.
+
+  object_counting_tracking:
+    description: "Counting objects, tracking quantities through transformations"
+    num_conversations: 600
+    examples:
+      - "I have 5 apples. I give 2 to you, buy 3 more, then eat 1. How many do I have?"
+      - "There are 3 red balls and 4 blue balls in a bag. I take out 2 red ones. What's left?"
+      - "How many legs do 3 cats and 2 spiders have in total?"
+
+  navigation_spatial:
+    description: "Following directions, relative positions, mental maps"
+    num_conversations: 500
+    examples:
+      - "Start facing north. Turn right. Walk 3 blocks. Turn left. Walk 2 blocks. Which direction are you facing?"
+      - "There's a circle of 8 chairs. Alice is in chair 1, Bob in chair 4. How many chairs between them going clockwise?"
+      - "In a 3x3 grid, X is in the center. O is in the top-right. Where should I place X to block O?"
+
+  truth_value_tracking:
+    description: "Web of lies — tracking who said what and whether it's true"
+    num_conversations: 500
+    examples:
+      - "Alice says it's raining. Bob says Alice is lying. Carol says Bob always tells the truth. Is it raining?"
+      - "Person A says 'I'm a liar.' Can this be true?"
+      - "Three people: one always lies, one always tells truth, one alternates. A says 'B lies.' B says 'C tells truth.' C says 'A lies.' Who is who?"
+
+  analogical_reasoning:
+    description: "'A is to B as C is to ___' pattern via speech"
+    num_conversations: 500
+    examples:
+      - "Hot is to cold as up is to what?"
+      - "Sword is to knight as wand is to what?"
+      - "Photosynthesis is to plants as cellular respiration is to what?"
+
+  causal_reasoning:
+    description: "Counterfactual scenarios and causal chains"
+    num_conversations: 500
+    examples:
+      - "If the internet had never been invented, how would journalism be different?"
+      - "What caused the 2008 financial crisis, step by step?"
+      - "If you remove the battery from a flashlight, what chain of events prevents the light from turning on?"
+
+assistant_traits:
+  default_persona: "clear thinker, patient explainer, step-by-step reasoner"
+  tts_instruct_templates:
+    default: "clear, natural, conversational — like a smart friend explaining"
+    explaining: "concise, hitting key points, not lecturing"
+    working_through: "brief thinking pauses, then crisp reasoning, interactive"
+
+user_traits:
+  types:
+    curious_thinker: {probability: 0.30, tts: "curious, engaged, asking follow-ups"}
+    struggling_student: {probability: 0.25, tts: "hesitant, confused, needs help"}
+    testing_model: {probability: 0.20, tts: "confident, challenging, probing"}
+    casual_questioner: {probability: 0.15, tts: "relaxed, casual, just wondering"}
+    impatient_asker: {probability: 0.10, tts: "fast, wanting quick answers"}
+
+conversation_structure:
+  min_turns: 4
+  max_turns: 10
+  typical_turns: 6
+  backchannel_probability: 0.3
+
+data_type_override:
+  standard: 0.70
+  long_form: 0.15
+  dynamic: 0.15

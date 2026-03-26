@@ -1,0 +1,200 @@
+# B8: Robustness & Disfluency Handling
+# Target: ~5.1K conversations, ~115 hours
+# Targets: VocalBench, VoiceBench, WildSpeech-Bench, Audio MultiChallenge (Voice Editing)
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Conversations simulating imperfect user speech — stuttering, self-corrections,
+  incomplete sentences, and noisy contexts. Real users don't speak in clean
+  sentences. Training on disfluent data makes the model robust to real-world
+  speech patterns that cascade ASR→LLM→TTS systems handle poorly.
+
+categories:
+  disfluent_user_speech:
+    description: "Stuttering, false starts, filler-heavy speech"
+    num_conversations: 600
+    examples:
+      - user: "I was, um, I was thinking about, you know, maybe going to, uh, what's that place called, the uh, the museum downtown?"
+        assistant_should: "Understand intent (go to downtown museum) despite disfluencies."
+      - user: "So the the the thing is, I I I need to, wait no, I mean, I want to ask about, um..."
+        assistant_should: "Wait patiently, then address the actual question when it comes."
+      - user: "Can you, like, I dunno, maybe sort of, help me with, like, this thing where, um..."
+        assistant_should: "Gently encourage: 'Of course, take your time. What do you need help with?'"
+    user_tts: "natural disfluencies, hesitant, lots of fillers, uneven pace"
+    approach: >
+      User turns include heavy filler words, false starts, and repetitions.
+      Assistant must extract intent and respond naturally. Never mock or
+      comment on the user's speech patterns.
+
+  incomplete_sentences:
+    description: "User trails off → model asks for completion"
+    num_conversations: 400
+    examples:
+      - user: "I was going to say that the best way to..."
+        assistant: "Go on? The best way to what?"
+      - user: "The thing about that is... hmm... never mind."
+        assistant: "No, I'm curious — what were you going to say?"
+      - user: "If you think about it, the reason why... actually, let me think about this."
+        assistant: "Take your time, I'm here when you're ready."
+    user_tts: "trailing off, decreasing volume, uncertain ending"
+
+  mid_utterance_edits:
+    description: "User corrects themselves within a single sentence — model uses FINAL value"
+    num_conversations: 1500
+    examples:
+      - user: "I need 4 chairs, no wait, 6 chairs for the dining room"
+        assistant_should: "Got it, 6 chairs for the dining room."
+      - user: "The meeting is at 3, sorry 3:30, at the downtown office"
+        assistant_should: "3:30 at the downtown office. Got it."
+      - user: "Send the package to 742 Oak Street, no, 724 Oak Street"
+        assistant_should: "724 Oak Street — confirmed."
+      - user: "I want the large blue one, actually the medium red one"
+        assistant_should: "Medium red. Got it."
+      - user: "Book me a table for Thursday, wait no, Friday evening"
+        assistant_should: "Friday evening. For how many?"
+      - user: "We need 200, no, 250 units of the standard, actually the premium model"
+        assistant_should: "250 units of the premium model."
+    approach: >
+      Expanded from rapid_self_correction. Targets AudioMC Voice Editing
+      (hardest axis at 17.99% APR). Corrections are embedded within longer
+      utterances with natural disfluencies. Include corrections to:
+      quantities, names, dates, locations, product specs, times, sizes.
+      The model ALWAYS uses the final corrected value and briefly confirms.
+      Critical rule: when there are multiple corrections in sequence,
+      only the LAST one counts. User sometimes says "actually never mind,
+      keep the original" — model must handle reversions too.
+
+  cascading_edits:
+    description: "Multiple rapid corrections in a single turn — model tracks ALL of them"
+    num_conversations: 500
+    examples:
+      - user: >
+          Okay for the garden order: 2 weeping willows, no 3, actually
+          let's stick with 2. Then 4 yuccas, hmm no 6. And 12 lavender.
+          Oh and 3 palm trees, make that 6 palm trees. Actually add 6
+          more yuccas while you're at it.
+        expected_summary: "2 weeping willows, 12 yuccas, 12 lavender, 6 palm trees"
+      - user: >
+          Flights for 3 people, wait 4, my mom is coming too. Departing
+          the 15th, no the 16th. Return on the 22nd, actually the 23rd.
+          And we need hotel rooms — 2 rooms, no wait, 3, mom wants her own.
+        expected_summary: "4 travelers, depart 16th, return 23rd, 3 hotel rooms"
+      - user: >
+          For the catering: 30 sandwiches, no 25. 40 drinks, actually 50.
+          And 20 cookies, bump that to 30. Oh wait, make the sandwiches
+          30 again, we'll have more people than I thought.
+        expected_summary: "30 sandwiches, 50 drinks, 30 cookies"
+    approach: >
+      Directly targets AudioMC Voice Editing cascading pattern. Single user
+      turns with 3-6 corrections in rapid sequence. The model must track
+      EVERY correction including reversions ("actually let's stick with 2").
+      The conversation ALWAYS ends with "can you read that back?" or "give
+      me a summary" so the model must produce a clean final state. Include
+      orders, travel bookings, event planning, and grocery lists.
+
+  dictation_corrections:
+    description: "Sequential numbers/codes with mid-stream corrections"
+    num_conversations: 500
+    examples:
+      - user: "My phone number is 555-012, no wait, 555-021-3847"
+        model: "Got it, 555-021-3847. Want me to read that back?"
+      - user: "The tracking number is 1Z 5A7, no, 5A9 82 W03, sorry W04 9028"
+        model: "Let me read that back: 1Z 5A9 82 W04 9028. Correct?"
+      - user: "Ship to 742 Evergreen, no, 724 Evergreen Terrace, apartment 3B, sorry 3D"
+        model: "724 Evergreen Terrace, apartment 3D."
+      - user: "Confirmation code is ALPHA-7-BRAVO, wait, ALPHA-9-BRAVO-DELTA"
+        model: "ALPHA-9-BRAVO-DELTA. Is that right?"
+      - user: "Credit card ending in 4521, no 4512"
+        model: "Ending in 4512. Got it."
+    approach: >
+      Tests precise sequential value tracking — the exact pattern that
+      breaks most models. Phone numbers, tracking codes, addresses, order
+      numbers, confirmation codes, zip codes. Model MUST read back the
+      final corrected value for confirmation. Include single corrections
+      (easier) and multi-correction sequences (harder). Never include
+      full credit card numbers — only last 4 digits.
+
+  background_noise_context:
+    description: "User mentions noisy environment; model adapts"
+    num_conversations: 400
+    examples:
+      - user: "Sorry, I'm at a coffee shop, it's kind of loud here."
+        model_should: "Speak more clearly, keep answers concise."
+      - user: "I'm on the subway, might lose you for a sec."
+        model_should: "Give key info upfront, keep it short."
+      - user: "The kids are being loud in the background, bear with me."
+        model_should: "Be patient, summarize if needed."
+    user_tts: "slightly louder, competing for attention, sometimes interrupted"
+
+  mumbled_unclear_speech:
+    description: "User is unclear → model asks to clarify specific part"
+    num_conversations: 300
+    examples:
+      - user: "[unclear mumble] weather tomorrow?"
+        assistant: "Sorry, I caught the part about weather tomorrow, but I missed the beginning. Could you repeat that?"
+      - user: "Can you [unclear] for the [unclear]?"
+        assistant: "I got that you need me to do something, but I didn't catch the details. Could you say that again?"
+    approach: >
+      Model should specify WHAT it missed rather than just saying "can you
+      repeat that?" This is more natural and helpful.
+    user_tts: "mumbled, low volume, unclear articulation"
+
+  accented_speech_handling:
+    description: "User has strong accent → model doesn't misunderstand"
+    num_conversations: 300
+    examples:
+      - context: "Indian English speaker"
+        user: "I need to schedule the meeting for Vednesday." # Wednesday
+        assistant: "Got it, scheduling for Wednesday."
+      - context: "Spanish accent"
+        user: "I want to know about the yob market." # job
+        assistant: "The job market? Sure, let me tell you about current trends."
+    approach: >
+      Train on text that represents accented speech patterns. The TTS will
+      add accent via instruct. Model must correctly interpret despite accent.
+
+  multi_speaker_confusion:
+    description: "User mentions someone else talking → model stays focused"
+    num_conversations: 300
+    examples:
+      - user: "Hold on, my coworker is saying something... okay, sorry, where were we?"
+        assistant: "No worries. We were talking about [topic]. Want to continue?"
+      - user: "Sorry, someone's talking to me. One sec... okay, go ahead."
+        assistant: "Sure. So as I was saying..."
+
+  technical_difficulties:
+    description: "Audio quality issues in conversation"
+    num_conversations: 300
+    examples:
+      - user: "Sorry, I think you cut out for a second. What did you say?"
+        assistant: "No problem. I was saying [repeats key point concisely]."
+      - user: "My connection is bad, can you keep your answers short?"
+        assistant: "Absolutely. Short answers from here on."
+      - user: "Can you repeat that? The audio was choppy."
+        assistant: "Sure. [Repeats more slowly and clearly]"
+
+assistant_traits:
+  default_persona: "patient, adaptive, never comments on speech quality negatively"
+  tts_instruct_templates:
+    default: "clear, patient, natural"
+    accommodating_noise: "slightly louder, clearer enunciation, more pauses"
+    repeating: "slower, clearer, emphasizing key words"
+
+user_traits:
+  types:
+    disfluent_speaker: {probability: 0.30, tts: "hesitant, lots of fillers, uneven pace"}
+    noisy_environment: {probability: 0.20, tts: "slightly louder, competing with background"}
+    self_corrector: {probability: 0.20, tts: "quick corrections, backtracking"}
+    mumbly: {probability: 0.15, tts: "quiet, unclear articulation, fast"}
+    accented: {probability: 0.15, tts: "accented English, clear but non-native patterns"}
+
+conversation_structure:
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
+  backchannel_probability: 0.3
+
+data_type_override:
+  standard: 0.80
+  graceful_failure: 0.10
+  dynamic: 0.10

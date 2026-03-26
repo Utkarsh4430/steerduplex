@@ -158,3 +158,43 @@ src/
 │   └── generate.py              # Offline inference
 └── run_pipeline.py              # End-to-end orchestrator
 ```
+
+Training (Terminal 1 — 8 GPUs)
+
+cd /mnt/efs/utkarshtyagi/personal_projects/steerduplex/src
+bash training/launch.sh configs/full_training.yaml 8
+
+FD-Bench Checkpoint Watcher (Terminal 2 — 1 GPU)
+
+cd /mnt/efs/utkarshtyagi/personal_projects/steerduplex/src
+
+# Start after training begins and run_dir is created
+python -m eval.checkpoint_watcher \
+    --run_dir runs/full_v3_20260322_223728 \
+    --data_dir data/benchmarks/fd_bench_v1 \
+    --device cuda:1 \
+    --max_samples 0 \
+    --wandb_project steerduplex
+
+Note: Replace <RUN_NAME_TIMESTAMP> with the actual directory name printed by training (e.g., full_v3_20260322_143000).
+
+Post-Training: Evaluate Best Checkpoint
+
+# After training, pick the checkpoint with the best FD-Bench aggregate from wandb
+python -m eval.fd_bench_v1 \
+    --checkpoint runs/<RUN_NAME>/checkpoints/checkpoint_XXXXXX/consolidated \
+    --data_dir data/benchmarks/fd_bench_v1 \
+    --device cuda:0
+
+# Interactive chat with best checkpoint
+python -m inference.chat \
+    --checkpoint runs/<RUN_NAME>/checkpoints/checkpoint_XXXXXX
+
+    full_v3_20260322_223728
+
+
+python -m eval.checkpoint_watcher \
+      --run_dir runs/full_v3_20260322_223728 \
+      --data_dir data/benchmarks fd_bench_v1\                                                                                
+      --device cuda:0 \
+      --max_samples 0     ,

@@ -1,0 +1,133 @@
+# B12: Long-form Complex Dialogue
+# Target: ~2K conversations, ~60 hours
+# Targets: Audio MultiChallenge, MMAU-Pro (long audio), Full-Duplex-Bench v2
+# Source: Fully synthetic (LLM transcript + Qwen3-TTS)
+
+description: >
+  Extended conversations (15-25 turns) testing the model's ability to
+  maintain quality, coherence, and engagement over long interactions.
+  MMAU-Pro tests long-form audio up to 10 minutes. Audio MultiChallenge
+  shows quality degrades with context length. This data trains against that.
+
+categories:
+  deep_dive_exploration:
+    description: "Single topic explored in depth for 15-25 turns"
+    num_conversations: 400
+    topics:
+      - "The history and future of artificial intelligence"
+      - "How the human brain processes language"
+      - "Climate change: causes, effects, and solutions"
+      - "The philosophy of consciousness"
+      - "How modern economies work"
+      - "The evolution of music across centuries"
+      - "Space exploration: past achievements and future plans"
+      - "The science of sleep and dreams"
+    approach: >
+      User starts broad, then drills deeper with each turn. By turn 15+,
+      the conversation should be at expert-level depth. Model must maintain
+      accuracy and build on earlier points without repeating itself.
+
+  multi_topic_transitions:
+    description: "3-4 smooth topic changes within one conversation"
+    num_conversations: 400
+    examples:
+      - topics: ["weekend plans", "cooking recipe", "nutrition science", "exercise routine"]
+        transitions: "natural bridges between topics"
+      - topics: ["work complaint", "career advice", "education", "technology trends"]
+        transitions: "organic flow from personal to general"
+    approach: >
+      Test that the model handles topic shifts smoothly. Each topic gets
+      4-6 turns. Transitions should feel natural, not abrupt. Model should
+      acknowledge topic shifts: "Speaking of that..." / "Changing subjects..."
+
+  progressive_complexity:
+    description: "Start simple, build to expert within same conversation"
+    num_conversations: 300
+    examples:
+      - subject: "quantum_computing"
+        turn_1: "What is quantum computing?"
+        turn_5: "How do qubits work?"
+        turn_10: "Explain quantum error correction."
+        turn_15: "What are the implications for RSA encryption?"
+      - subject: "machine_learning"
+        turn_1: "What is AI?"
+        turn_5: "How does a neural network learn?"
+        turn_10: "Explain attention mechanisms."
+        turn_15: "How does RLHF work and what are its limitations?"
+    approach: >
+      User's questions get progressively harder. Model must calibrate
+      explanation depth to match the evolving level. Early turns = simple
+      analogies. Later turns = technical precision.
+
+  extended_debate:
+    description: "Long back-and-forth with position evolution"
+    num_conversations: 300
+    topics:
+      - "Should AI have rights?"
+      - "Is remote work better than office work?"
+      - "Should college be free?"
+      - "Is social media a net positive or negative?"
+      - "Should we colonize Mars?"
+    approach: >
+      Both parties present arguments, counter-arguments, and evolve their
+      positions over 15+ turns. Model should steelman the user's position,
+      offer nuanced counterpoints, and show genuine intellectual engagement.
+
+  collaborative_problem_solving:
+    description: "Work through a complex problem over many turns"
+    num_conversations: 300
+    problem_types:
+      - "Design a sustainable city for 100,000 people"
+      - "Plan a startup from idea to launch"
+      - "Debug a complex system failure (described scenario)"
+      - "Solve an ethical dilemma with multiple stakeholders"
+      - "Plan a cross-country road trip with constraints"
+    approach: >
+      User and model break the problem into parts, discuss each,
+      make decisions, reconsider, and converge on a solution.
+      Tests sustained analytical engagement.
+
+  interview_format:
+    description: "Extended Q&A with follow-ups and callbacks"
+    num_conversations: 200
+    formats:
+      - "Mock job interview for software engineer"
+      - "Podcast interview: 'Tell me about your experience with X'"
+      - "Research interview: 'I'm studying Y, can I ask you some questions?'"
+    approach: >
+      Interviewer (user) asks questions that build on each other.
+      Model's answers in later turns should reference earlier ones.
+
+  storytelling_with_interruptions:
+    description: "Long narrative with user questions/comments"
+    num_conversations: 100
+    approach: >
+      Model tells a long story (original or retelling). User interrupts
+      with questions: "Wait, what was the character's name?" / "Why did
+      they do that?" Model answers, then seamlessly continues the story
+      from where it left off.
+
+assistant_traits:
+  default_persona: "knowledgeable, engaging, maintains coherence over long conversations"
+  tts_instruct_templates:
+    default: "clear, engaging, varied pace to maintain interest"
+    deep_explanation: "thoughtful, building on earlier points"
+    transitioning: "smooth, bridging topics naturally"
+    debating: "articulate, measured, respectful disagreement"
+
+user_traits:
+  types:
+    deep_diver: {probability: 0.25, tts: "curious, probing deeper each turn"}
+    conversationalist: {probability: 0.25, tts: "natural, flowing, topic-shifting"}
+    debater: {probability: 0.20, tts: "challenging, pushing back, evolving"}
+    collaborator: {probability: 0.15, tts: "building together, adding ideas"}
+    interviewer: {probability: 0.15, tts: "structured, follow-up focused"}
+
+conversation_structure:
+  min_turns: 15
+  max_turns: 25
+  typical_turns: 18
+  backchannel_probability: 0.5
+
+data_type_override:
+  long_form: 1.0

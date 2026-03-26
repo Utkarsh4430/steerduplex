@@ -40,7 +40,11 @@ def build_alignments_with_system_prompt(
     whisper_alignments: list | None = None,
 ) -> list:
     alignments = []
+    # Randomly use rephrased prompt (50% chance) for training diversity
     system_prompt = metadata.get("system_prompt", "")
+    rephrased = metadata.get("system_prompt_rephrased", "")
+    if rephrased and random.random() < 0.5:
+        system_prompt = rephrased
     if system_prompt:
         prompt_text = wrap_with_system_tags(system_prompt)
         prompt_end = metadata.get("prompt_end_sec", 0.0)
@@ -326,10 +330,10 @@ def main():
         if entry:
             entries.append(entry)
 
-    # Split into train/eval
-    eval_ratio = cfg.get("eval_split_ratio", 0.05)
+    # Split into train/eval (fixed count, remainder goes to training)
+    eval_count = cfg.get("eval_split_count", 500)
     random.shuffle(entries)
-    n_eval = max(1, int(len(entries) * eval_ratio))
+    n_eval = min(eval_count, max(1, len(entries) // 2))  # cap at half to be safe
     eval_entries = entries[:n_eval]
     train_entries = entries[n_eval:]
 

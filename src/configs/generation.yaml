@@ -3,16 +3,29 @@
 # Phase 1: Transcript generation via OpenAI-compatible API
 # Uses LiteLLM proxy at Scale with bedrock/qwen3-32b
 transcript:
+  # Multiple LLM models for transcript diversity. Each conversation randomly
+  # selects a model based on the assigned weight. The model name is stored in
+  # the transcript JSON ("llm_model" field) for reproducibility.
+  # All models are called via OpenAI SDK (through LiteLLM proxy or native API).
+  llm_models:
+    - model: "bedrock/qwen.qwen3-32b-v1:0"
+      weight: 0.33
+    - model: "gemini/gemini-3-flash-preview"
+      weight: 0.33
+    - model: "openai/gpt-5.1-chat-latest"
+      weight: 0.34
+  # Legacy single-model fallback (used if llm_models is absent)
   llm_model: "bedrock/qwen.qwen3-32b-v1:0"
   llm_base_url: "https://litellm-proxy.ml-serving-internal.scale.com/v1"
-  llm_api_key: ""  # Set OPENAI_API_KEY env var or fill in here
+  llm_api_key: "sk-WtJy90ltT2hpJSFKQ1u_TA"
   temperature: 0.9
-  max_tokens: 4096
+  max_tokens: 6144  # increased for B5/B12 long-form (15-25 turns)
   turns_range: [4, 12]
   categories_dir: "../data_categories"
   output_dir: "data/transcripts"
   num_workers: 64  # parallel LLM workers for transcript generation
   pilot_per_category:
+    # A-series: Steerability (original)
     A1_customer_service: 60
     A2_qa_assistant: 60
     A3_tone_controlled: 60
@@ -23,9 +36,24 @@ transcript:
     A8_failure_cases: 20
     A9_dynamic_steering: 200
     A10_graceful_failure: 40
-  # Full training: ~66K conversations → ~1000 hours after quality filtering
-  # A9 gets 33% (core novelty: dynamic steering)
+    # B-series: Beyond Steerability (capabilities)
+    B1_speech_reasoning: 60
+    B2_math_reasoning: 40
+    B3_knowledge_qa: 60
+    B4_instruction_following: 50   # expanded: +conditional_triggers, stacked, multi_query
+    B5_memory_coherence: 60       # expanded: +challenge_resistance, numerical_state, incidental
+    B6_paralinguistic: 40
+    B7_creative_language: 30
+    B8_robustness: 50             # expanded: +mid_utterance, cascading, dictation
+    B9_duplex_patterns: 60        # expanded: +pause_silence_training
+    B10_speech_understanding: 30  # expanded: +audio_cue_memory
+    B11_safety: 20
+    B12_longform_dialogue: 20
+  # Full training: ~119.6K conversations → ~2230 hours after quality filtering
+  # A-series: ~66K convos, ~1000h (steerability)
+  # B-series: ~53.6K convos, ~1230h (capabilities) — expanded for benchmark gaps
   full_per_category:
+    # A-series: Steerability
     A1_customer_service: 7000
     A2_qa_assistant: 7000
     A3_tone_controlled: 6000
@@ -36,6 +64,19 @@ transcript:
     A8_failure_cases: 2000
     A9_dynamic_steering: 22000
     A10_graceful_failure: 4000
+    # B-series: Beyond Steerability (expanded v4 — benchmark gap-filling)
+    B1_speech_reasoning: 6000
+    B2_math_reasoning: 4000
+    B3_knowledge_qa: 6000
+    B4_instruction_following: 5200   # +1200: conditional_triggers, stacked_constraints, multi_query
+    B5_memory_coherence: 6800       # +2800: challenge_resistance, numerical_state, incidental_memory
+    B6_paralinguistic: 4000
+    B7_creative_language: 3000
+    B8_robustness: 5100             # +2100: mid_utterance_edits, cascading_edits, dictation_corrections
+    B9_duplex_patterns: 6500        # +1500: pause_silence_training
+    B10_speech_understanding: 3000  # +500: audio_cue_memory
+    B11_safety: 2000
+    B12_longform_dialogue: 2000
   # Data type distribution (applied across categories)
   data_type_weights:
     standard: 0.50
@@ -43,6 +84,24 @@ transcript:
     counterfactual: 0.10
     long_form: 0.10
     graceful_failure: 0.05
+  # Cross-cutting reasoning style — applied to ALL categories via LLM system prompt.
+  # This is a duplex speech model, NOT a text chatbot. Reasoning must be conversational.
+  reasoning_style:
+    principle: >
+      The model reasons through natural conversation, not verbose chain-of-thought.
+      It speaks like a smart person having a real conversation — not a textbook.
+    levels:
+      simple: "Direct answer. No preamble. 'Paris.' not 'Let me think... the capital is... Paris.'"
+      medium: "One brief reasoning clause, then answer. 'Well 20% off 80 is 16, so 64 dollars.'"
+      complex: "Brief acknowledgment, 2-3 sentences of reasoning, then answer. 'Hmm okay, so if train A leaves at 3 doing 60, and B leaves at 4 doing 80... the gap is 60 miles, B closes at 20 mph, so about 3 hours — they meet at 7.'"
+      interactive: "For hard problems, reason WITH the user: 'So we've got X, right? And that means Y. You see where I'm going?' This is BETTER than monologuing."
+    natural_markers: ["so", "which means", "right so", "okay so", "that tells us", "let me think", "hmm", "well"]
+    never:
+      - "Paragraph-length reasoning chains"
+      - "Formal step enumeration ('Step 1... Step 2...')"
+      - "Restating the question before answering"
+      - "Meta-commentary about reasoning ('I'll approach this systematically...')"
+    math_exception: "Brief mental math narration IS natural: '347 minus 200 is 147, plus 11 is 158.' One line max."
   max_retries: 3  # per-conversation LLM call retries
   retry_wait_sec: 5  # base wait on rate limit (exponential backoff)
 
@@ -88,7 +147,7 @@ assembly:
 dataset:
   output_dir: "data/formatted"
   manifest_path: "data/formatted/manifest.jsonl"
-  eval_split_ratio: 0.05  # 5% held out for eval
+  eval_split_count: 500   # Fixed 500 conversations for eval; rest goes to training
 
 # Quality filtering (lightweight for scale)
 quality:
