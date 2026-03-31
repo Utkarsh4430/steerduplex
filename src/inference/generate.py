@@ -65,7 +65,8 @@ class MoshiInference:
         # Set default CUDA device — CUDA graphs require capture on the
         # correct device. This persists for all subsequent operations.
         if self.device.type == "cuda":
-            torch.cuda.set_device(self.device)
+            cuda_idx = self.device.index if self.device.index is not None else 0
+            torch.cuda.set_device(cuda_idx)
 
         # Reproducibility
         if seed is not None and seed >= 0:
