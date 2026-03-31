@@ -6,6 +6,7 @@ EVAL_NAME="${1:-}"
 if [ -z "$EVAL_NAME" ]; then
     echo "Usage: bash scripts/run_eval.sh <eval_name> [eval_args...]"
     echo "Example: bash scripts/run_eval.sh bigbench_audio --device cuda --limit 5"
+    echo "Multi-GPU example: bash scripts/run_eval.sh bigbench_audio --device cuda:0 cuda:1 --limit 100"
     exit 1
 fi
 
