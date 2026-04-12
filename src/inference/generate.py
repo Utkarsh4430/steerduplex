@@ -35,6 +35,7 @@ if "/usr/lib/x86_64-linux-gnu" not in _lib_path:
 
 from moshi.models import loaders
 from safetensors.torch import load_file
+from inference.personaplex_loader import is_personaplex, load_personaplex_lm
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class MoshiInference:
         save_voice_prompt_embeddings: bool = False,
     ):
         self.device = torch.device(device)
+        self.hf_repo_id = hf_repo_id
 
         # Set default CUDA device — CUDA graphs require capture on the
         # correct device. This persists for all subsequent operations.
@@ -81,10 +83,18 @@ class MoshiInference:
             self.checkpoint_info = loaders.CheckpointInfo.from_hf_repo(hf_repo=hf_repo_id)
 
             # Dual Mimi
+            # checkpoint_info.get_mimi() computes num_codebooks from lm_config["dep_q"] /
+            # lm_config["n_q"], but PersonaPlex's config.json only has {"model_type":...,
+            # "version":...} so those keys are absent. Call loaders.get_mimi() directly
+            # (defaults to num_codebooks=8, correct for both models).
             logger.info("Loading Mimi codec (x2)...")
-            self.mimi = self.checkpoint_info.get_mimi(device=device)
+            if is_personaplex(self.hf_repo_id):
+                self.mimi = loaders.get_mimi(self.checkpoint_info.mimi_weights, device=device)
+                self.other_mimi = loaders.get_mimi(self.checkpoint_info.mimi_weights, device=device)
+            else:
+                self.mimi = self.checkpoint_info.get_mimi(device=device)
+                self.other_mimi = self.checkpoint_info.get_mimi(device=device)
             self.mimi.eval()
-            self.other_mimi = self.checkpoint_info.get_mimi(device=device)
             self.other_mimi.eval()
             self.sample_rate = self.mimi.sample_rate
 
@@ -121,6 +131,19 @@ class MoshiInference:
             self._warmup()
 
     def _load_lm(self, checkpoint_path: str | None, device: str):
+        if is_personaplex(self.hf_repo_id):
+            # PersonaPlex config.json only has {"model_type": ..., "version": ...}
+            # and cannot be used as LMModel kwargs. Use dedicated loader with
+            # correct architecture constants (n_q=16, dep_q=16) and weight patching.
+            model = load_personaplex_lm(
+                hf_repo=self.hf_repo_id,
+                device=device,
+                dtype=torch.bfloat16,
+            )
+            if checkpoint_path:
+                self._load_checkpoint_weights(model, checkpoint_path, device)
+            return model
+
         lm_config = dict(
             loaders._lm_kwargs
             if self.checkpoint_info.raw_config is None

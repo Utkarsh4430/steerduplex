@@ -31,6 +31,15 @@ try:
 except ImportError:
     from client_utils import log
 
+try:
+    from .personaplex_loader import is_personaplex, load_personaplex_lm
+except ImportError:
+    from personaplex_loader import is_personaplex, load_personaplex_lm
+
+# mimi.set_num_codebooks(8) is always called at load time; decode uses only
+# the first 8 audio codebooks regardless of the model's dep_q value.
+N_MIMI_CODEBOOKS = 8
+
 
 def seed_all(seed):
     torch.manual_seed(seed)
@@ -72,7 +81,21 @@ def load_moshi_lm(
     device: str,
     dtype: torch.dtype,
     fuse_lora: bool,
+    hf_repo: str = "",
 ) -> Any:
+    if is_personaplex(hf_repo):
+        # PersonaPlex config.json only has {"model_type": ..., "version": ...}
+        # and cannot be used as LMModel kwargs. Use dedicated loader with
+        # correct architecture constants (n_q=16, dep_q=16) and weight patching.
+        model = load_personaplex_lm(
+            hf_repo=hf_repo,
+            device=device,
+            dtype=dtype,
+        )
+        if checkpoint_path:
+            load_checkpoint_weights(model, checkpoint_path, device)
+        return model
+
     lm_config = dict(
         loaders._lm_kwargs
         if checkpoint_info.raw_config is None
@@ -137,7 +160,7 @@ class ServerState:
                 tokens = self.lm_gen.step(codes[:, :, c: c + 1])
                 if tokens is None:
                     continue
-                _ = self.mimi.decode(tokens[:, 1:])
+                _ = self.mimi.decode(tokens[:, 1:1 + N_MIMI_CODEBOOKS])
 
         torch.cuda.synchronize()
 
@@ -148,7 +171,7 @@ class ServerState:
         opus_writer: sphn.OpusStreamWriter
     ):
         assert tokens.shape[1] == self.lm_gen.lm_model.dep_q + 1
-        main_pcm = self.mimi.decode(tokens[:, 1:])
+        main_pcm = self.mimi.decode(tokens[:, 1:1 + N_MIMI_CODEBOOKS])
         main_pcm = main_pcm.cpu()
         opus_bytes = opus_writer.append_pcm(main_pcm[0, 0].numpy())
         if len(opus_bytes) > 0:
@@ -292,7 +315,13 @@ def main():
     log("info", "retrieving checkpoint")
     checkpoint_info = loaders.CheckpointInfo.from_hf_repo(hf_repo=args.hf_repo)
     log("info", "loading mimi")
-    mimi = checkpoint_info.get_mimi(device=args.device)
+    # checkpoint_info.get_mimi() reads dep_q/n_q from lm_config, which is absent
+    # in PersonaPlex's minimal config.json. Use loaders.get_mimi() directly instead
+    # (defaults to num_codebooks=8, correct for both models).
+    if is_personaplex(args.hf_repo):
+        mimi = loaders.get_mimi(checkpoint_info.mimi_weights, device=args.device)
+    else:
+        mimi = checkpoint_info.get_mimi(device=args.device)
     log("info", "mimi loaded")
 
     text_tokenizer = checkpoint_info.get_text_tokenizer()
@@ -304,6 +333,7 @@ def main():
         args.device,
         args.dtype,
         args.fuse_lora,
+        hf_repo=args.hf_repo,
     )
     log("info", "moshi loaded")
 
