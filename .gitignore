@@ -89,3 +89,6 @@ src/pipeline/voicepool/sph2pipe_v2.5/
 
 # HuggingFace cache
 .cache/
+
+# Node modules
+**/node_modules/
