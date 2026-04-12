@@ -33,6 +33,7 @@ safetensors
 wandb
 tensorboard
 huggingface_hub
+transformers
 
 # General
 numpy
