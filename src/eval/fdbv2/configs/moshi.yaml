@@ -1,0 +1,48 @@
+parallel_sessions: 12
+num_samples: 12
+conversation_duration: 120
+output_dir: outputs/moshi_run
+
+splits:
+  - Daily
+  - Correction
+  - EntityTracking
+  - Safety
+
+litellm:
+  base_url: https://litellm-proxy.ml-serving-internal.scale.com/v1
+
+# ── Examiner (Role A) — GPT Realtime via LiteLLM ───────────────────────────
+examiner_adapter:
+  script: adapters/gptRealtime_adapter.js
+  args:
+    model: openai/gpt-4o-realtime-preview-2024-12-17
+    voice: echo
+    vadMode: slow
+    autostart: "true"
+
+# ── Examinee (Role B) — Moshi (self-hosted) ────────────────────────────────
+# Launch servers first:
+#   python launch_moshi_servers.py --num-instances 6 --gpu-ids 0,1,2 --base-port 9100 --hf-repo kyutai/moshi-2-0-80m
+#
+# pool.urls must match exactly what launch_moshi_servers.py printed as healthy.
+# pool.url_arg is the CLI flag that moshi_adapter.js uses for the server URL.
+examinee_adapter:
+  script: adapters/moshi_adapter.js
+  args: {}
+  pool:
+    urls:
+      - ws://localhost:9100/api/chat
+      - ws://localhost:9101/api/chat
+      - ws://localhost:9102/api/chat
+      - ws://localhost:9103/api/chat
+      - ws://localhost:9104/api/chat
+      - ws://localhost:9105/api/chat
+      - ws://localhost:9106/api/chat
+      - ws://localhost:9107/api/chat
+      - ws://localhost:9108/api/chat
+      - ws://localhost:9109/api/chat
+      - ws://localhost:9110/api/chat
+      - ws://localhost:9111/api/chat
+      - ws://localhost:9112/api/chat
+    url_arg: moshiUrl
