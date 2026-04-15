@@ -17,14 +17,14 @@ from typing import Any, Dict, List, Optional
 import librosa
 import numpy as np
 import soundfile as sf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from huggingface_hub import snapshot_download
+from openai import OpenAI
 from tqdm import tqdm
 
-from eval.transcription_utils import transcribe_batch
 from inference.generate import MoshiInference
 
-CACHE_DIR = "/fs/gamma-projects/audio/raman/steerd/cache"
 DEFAULT_SYSTEM_PROMPT = "Answer the question with just the answer, no explanation."
 
 logger = logging.getLogger(__name__)
@@ -32,9 +32,7 @@ logger = logging.getLogger(__name__)
 load_dotenv() 
 
 def configure_environment() -> None:
-    os.environ["HF_HOME"] = CACHE_DIR
-    os.environ["HUGGINGFACE_HUB_CACHE"] = CACHE_DIR
-    os.environ["TRANSFORMERS_CACHE"] = CACHE_DIR
+    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,7 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system_prompt", type=str, default=DEFAULT_SYSTEM_PROMPT)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--skip_transcription", action="store_true")
-    parser.add_argument("--whisper_batch_size", type=int, default=8)
+    parser.add_argument("--litellm-base", type=str, default=None,
+                        help="LiteLLM proxy base URL (overrides LITELLM_BASE_URL env var).")
+    parser.add_argument("--workers", type=int, default=16,
+                        help="Parallel workers for Whisper transcription (default: 16).")
     parser.add_argument("--limit", type=int, default=None, help="Only process first N examples")
     return parser.parse_args()
 
@@ -76,7 +77,6 @@ def load_bigbench_examples(token: Optional[str] = None) -> List[Dict[str, Any]]:
     snapshot_dir = snapshot_download(
         repo_id="ArtificialAnalysis/big_bench_audio",
         repo_type="dataset",
-        cache_dir=CACHE_DIR,
         token=token,
         allow_patterns=["metadata.jsonl", "data/*.mp3"],
     )
@@ -325,7 +325,7 @@ def run_inference(
         return results
 
     logger.info("Pre-caching Moshi model repo %s before spawning workers.", hf_repo)
-    snapshot_download(repo_id=hf_repo, cache_dir=CACHE_DIR)
+    snapshot_download(repo_id=hf_repo)
 
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue()
@@ -408,11 +408,29 @@ def run_inference(
     return results
 
 
+def _normalize_litellm_base(base_url: str) -> str:
+    b = base_url.rstrip("/")
+    if b.endswith("/v1"):
+        b = b[:-3]
+    return b + "/v1"
+
+
+def _transcribe_one(client: OpenAI, audio_path: str) -> str:
+    with open(audio_path, "rb") as f:
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f,
+            response_format="text",
+        )
+    return response.strip() if isinstance(response, str) else response.text.strip()
+
+
 def run_transcription(
     results: List[Dict[str, Any]],
     output_dir: Path,
-    device: str,
-    batch_size: int,
+    litellm_base: str,
+    litellm_key: str,
+    num_workers: int,
     output_json_path: Path,
 ) -> None:
     pending_entries = [entry for entry in results if entry.get("transcription") is None]
@@ -420,12 +438,29 @@ def run_transcription(
         logger.info("All outputs already have transcriptions, skipping Whisper.")
         return
 
-    audio_paths = [str(output_dir / entry["output_audio_path"]) for entry in pending_entries]
-    logger.info("Transcribing %d output audios with Whisper large v3...", len(audio_paths))
-    texts = transcribe_batch(audio_paths, device=device, batch_size=batch_size)
+    logger.info(
+        "Transcribing %d output audios via Whisper API with %d workers...",
+        len(pending_entries), num_workers,
+    )
+    client = OpenAI(base_url=litellm_base, api_key=litellm_key)
 
-    for entry, text in zip(pending_entries, texts):
-        entry["transcription"] = text
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_entry = {
+            executor.submit(
+                _transcribe_one, client, str(output_dir / entry["output_audio_path"])
+            ): entry
+            for entry in pending_entries
+        }
+        with tqdm(total=len(pending_entries), desc="Whisper", unit="file", dynamic_ncols=True) as pbar:
+            for future in as_completed(future_to_entry):
+                entry = future_to_entry[future]
+                try:
+                    entry["transcription"] = future.result()
+                except Exception:
+                    logger.exception("Transcription failed for %s.", entry.get("unique_id"))
+                    entry["transcription"] = ""
+                pbar.update(1)
+                pbar.set_postfix({"last": entry.get("unique_id", "")})
 
     save_results(results, output_json_path)
     logger.info("Saved transcriptions to %s", output_json_path)
@@ -480,11 +515,23 @@ def main() -> None:
         results = existing_results
 
     if not args.skip_transcription:
+        litellm_base = _normalize_litellm_base(
+            args.litellm_base or os.environ.get("LITELLM_BASE_URL", "")
+        )
+        litellm_key = os.environ.get("LITELLM_API_KEY", "")
+        if not litellm_base or litellm_base == "/v1":
+            raise SystemExit(
+                "ERROR: LiteLLM base URL is not set. "
+                "Pass --litellm-base or set LITELLM_BASE_URL in the environment."
+            )
+        if not litellm_key:
+            raise SystemExit("ERROR: LITELLM_API_KEY is not set. Add it to .env or export it.")
         run_transcription(
             results=results,
             output_dir=output_dir,
-            device=args.devices[0],
-            batch_size=args.whisper_batch_size,
+            litellm_base=litellm_base,
+            litellm_key=litellm_key,
+            num_workers=args.workers,
             output_json_path=output_json_path,
         )
     else:

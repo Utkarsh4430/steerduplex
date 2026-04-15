@@ -1,6 +1,6 @@
 """LLM-as-judge evaluation for BigBench Audio Moshi outputs.
 
-Reads generated outputs from an output.json file and uses an OpenAI model
+Reads generated outputs from an output.json file and uses a LiteLLM proxy
 to judge each transcription as CORRECT or INCORRECT against the official answer.
 """
 
@@ -11,17 +11,21 @@ import multiprocessing as mp
 import os
 import queue
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
+from huggingface_hub import snapshot_download
 from openai import OpenAI
 from tqdm import tqdm
 
 load_dotenv("/fs/gamma-projects/audio/raman/steerd/steerduplex/src/eval/fdb_v2/.env")
 
 logger = logging.getLogger(__name__)
+
+HF_REPO = "ArtificialAnalysis/big_bench_audio"
 
 JUDGE_MODEL = "gpt-5.4-mini"
 
@@ -55,6 +59,106 @@ def setup_logging() -> None:
     )
 
 
+def normalize_litellm_base(base_url: str) -> str:
+    """Return base URL with /v1 appended exactly once."""
+    b = base_url.rstrip("/")
+    if b.endswith("/v1"):
+        b = b[:-3]
+    return b + "/v1"
+
+
+# ---------------------------------------------------------------------------
+# Whisper transcription helpers (used when `question` field is missing)
+# ---------------------------------------------------------------------------
+
+def _resolve_snapshot_dir() -> Path:
+    logger.info("Resolving BigBench Audio snapshot from HuggingFace cache...")
+    snapshot_dir = snapshot_download(
+        repo_id=HF_REPO,
+        repo_type="dataset",
+        token=os.environ.get("HF_TOKEN"),
+        allow_patterns=["metadata.jsonl", "data/*.mp3"],
+    )
+    return Path(snapshot_dir)
+
+
+def _load_snapshot_index(snapshot_dir: Path) -> Dict[str, Path]:
+    """Build a mapping of unique_id -> MP3 path from the HF snapshot metadata."""
+    metadata_path = snapshot_dir / "metadata.jsonl"
+    index: Dict[str, Path] = {}
+    with metadata_path.open() as f:
+        for line in f:
+            record = json.loads(line)
+            unique_id = f"{record['category']}_{record['id']}"
+            index[unique_id] = snapshot_dir / record["file_name"]
+    return index
+
+
+def _transcribe_one(client: OpenAI, mp3_path: Path) -> str:
+    with mp3_path.open("rb") as f:
+        response = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f,
+            response_format="text",
+        )
+    return response.strip() if isinstance(response, str) else response.text.strip()
+
+
+def run_whisper_transcription(
+    results: List[Dict[str, Any]],
+    input_path: Path,
+    litellm_base: str,
+    litellm_key: str,
+    num_workers: int,
+) -> None:
+    """Transcribe missing `question` fields in-place and save back to input_path."""
+    pending = [r for r in results if r.get("question") is None]
+    if not pending:
+        return
+
+    logger.info("%d entries missing `question` field — running Whisper transcription.", len(pending))
+
+    snapshot_dir = _resolve_snapshot_dir()
+    index = _load_snapshot_index(snapshot_dir)
+    logger.info("Snapshot index loaded: %d entries.", len(index))
+
+    pairs: List[Tuple[Dict[str, Any], Path]] = []
+    for entry in pending:
+        uid = entry["unique_id"]
+        mp3_path = index.get(uid)
+        if mp3_path is None or not mp3_path.exists():
+            logger.warning("No audio found for %s, skipping.", uid)
+            entry["question"] = None
+        else:
+            pairs.append((entry, mp3_path))
+
+    if not pairs:
+        logger.warning("No audio files found for any pending entries.")
+        return
+
+    logger.info("Transcribing %d files via Whisper with %d workers...", len(pairs), num_workers)
+    client = OpenAI(base_url=litellm_base, api_key=litellm_key)
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_entry = {
+            executor.submit(_transcribe_one, client, mp3_path): entry
+            for entry, mp3_path in pairs
+        }
+        with tqdm(total=len(pairs), desc="Whisper", unit="file", dynamic_ncols=True) as pbar:
+            for future in as_completed(future_to_entry):
+                entry = future_to_entry[future]
+                try:
+                    entry["question"] = future.result()
+                except Exception:
+                    logger.exception("Transcription failed for %s.", entry["unique_id"])
+                    entry["question"] = None
+                pbar.update(1)
+                pbar.set_postfix({"last": entry["unique_id"]})
+
+    save_results(results, input_path)
+    logger.info("Saved transcribed questions back to %s", input_path)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run LLM-as-judge on BigBench Audio Moshi outputs."
@@ -72,10 +176,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to write judged output JSON. Defaults to <input_dir>/llm_judge_output.json.",
     )
     parser.add_argument(
+        "--litellm-base",
+        type=str,
+        default=None,
+        help="LiteLLM proxy base URL (overrides LITELLM_BASE_URL env var).",
+    )
+    parser.add_argument(
         "--model",
         type=str,
         default=JUDGE_MODEL,
-        help=f"OpenAI model to use for judging (default: {JUDGE_MODEL}).",
+        help=f"LiteLLM model to use for judging (default: {JUDGE_MODEL}).",
     )
     parser.add_argument(
         "--workers",
@@ -159,7 +269,7 @@ def judge_single(
             return "ERROR"
         return verdict
     except Exception:
-        logger.exception("OpenAI call failed for %s.", entry.get("unique_id"))
+        logger.exception("LiteLLM call failed for %s.", entry.get("unique_id"))
         return "ERROR"
 
 
@@ -167,10 +277,12 @@ def _worker(
     entries: List[Dict[str, Any]],
     candidate_field: str,
     model: str,
+    litellm_base: str,
+    litellm_key: str,
     result_queue: mp.Queue,
 ) -> None:
     """Worker process: judges each entry and puts results onto the queue."""
-    client = OpenAI(base_url="https://us.api.openai.com/v1")
+    client = OpenAI(base_url=litellm_base, api_key=litellm_key)
     for entry in entries:
         verdict = judge_single(entry, candidate_field, model, client)
         result_queue.put({"unique_id": entry["unique_id"], "verdict": verdict})
@@ -212,6 +324,8 @@ def run_judge(
     entries: List[Dict[str, Any]],
     candidate_field: str,
     model: str,
+    litellm_base: str,
+    litellm_key: str,
     num_workers: int,
 ) -> Dict[str, str]:
     """Run parallel LLM judging. Returns mapping of unique_id -> verdict."""
@@ -232,7 +346,7 @@ def run_judge(
             continue
         p = ctx.Process(
             target=_worker,
-            args=(chunk, candidate_field, model, result_queue),
+            args=(chunk, candidate_field, model, litellm_base, litellm_key, result_queue),
         )
         p.start()
         processes.append(p)
@@ -280,9 +394,24 @@ def main() -> None:
         Path(args.output) if args.output else input_path.parent / "llm_judge_output.json"
     )
 
+    litellm_base = normalize_litellm_base(
+        args.litellm_base or os.environ.get("LITELLM_BASE_URL", "")
+    )
+    litellm_key = os.environ.get("LITELLM_API_KEY", "")
+    if not litellm_base or litellm_base == "/v1":
+        raise SystemExit(
+            "ERROR: LiteLLM base URL is not set. "
+            "Pass --litellm-base or set LITELLM_BASE_URL in the environment."
+        )
+    if not litellm_key:
+        raise SystemExit(
+            "ERROR: LITELLM_API_KEY is not set. Add it to .env or export it."
+        )
+
     logger.info("Input:  %s", input_path)
     logger.info("Output: %s", output_path)
     logger.info("Model:  %s", args.model)
+    logger.info("LiteLLM base: %s", litellm_base)
     logger.info("Workers: %d", args.workers)
     logger.info("Candidate field: %s", args.candidate_field)
 
@@ -290,6 +419,15 @@ def main() -> None:
     if args.limit is not None:
         results = results[: args.limit]
         logger.info("Limited to first %d examples.", len(results))
+
+    # Ensure all entries have a `question` field before judging
+    run_whisper_transcription(
+        results=results,
+        input_path=input_path,
+        litellm_base=litellm_base,
+        litellm_key=litellm_key,
+        num_workers=args.workers,
+    )
 
     # Load any previously judged results to allow resuming
     existing_judged: Dict[str, str] = {}
@@ -313,6 +451,8 @@ def main() -> None:
             entries=pending,
             candidate_field=args.candidate_field,
             model=args.model,
+            litellm_base=litellm_base,
+            litellm_key=litellm_key,
             num_workers=args.workers,
         )
         existing_judged.update(new_verdicts)
