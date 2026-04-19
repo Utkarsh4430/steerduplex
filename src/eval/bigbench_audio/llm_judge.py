@@ -21,7 +21,7 @@ from huggingface_hub import snapshot_download
 from openai import OpenAI
 from tqdm import tqdm
 
-load_dotenv("/fs/gamma-projects/audio/raman/steerd/steerduplex/src/eval/fdb_v2/.env")
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

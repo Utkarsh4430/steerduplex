@@ -237,10 +237,24 @@ def _inference_worker(
     greedy: bool,
     result_queue: mp.Queue,
 ) -> None:
+    # Restrict to the assigned GPU before any CUDA init occurs. Without this,
+    # PyTorch allocates a CUDA context on every visible device at import time,
+    # so 4 spawned workers each touching 4 GPUs = 16 simultaneous contexts → OOM.
+    import torch
+    device_obj = torch.device(device)
+    if device_obj.type == "cuda" and device_obj.index is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(device_obj.index)
+        device = "cuda:0"
+
     configure_environment()
     setup_logging()
 
-    logger.info("Worker starting on %s with %d examples.", device, len(examples))
+    def log(msg: str) -> None:
+        # Route through queue so the main process can display via tqdm.write()
+        # instead of writing directly to stderr (which tqdm garbles).
+        result_queue.put(("log", f"[{device}] {msg}"))
+
+    log(f"Starting with {len(examples)} examples — loading model...")
     try:
         model = MoshiInference(
             hf_repo_id=hf_repo,
@@ -249,11 +263,12 @@ def _inference_worker(
             seed=seed,
             greedy=greedy,
         )
-    except Exception:
-        logger.exception("Failed to initialize Moshi on %s.", device)
+    except Exception as exc:
+        log(f"ERROR: Failed to initialize Moshi: {exc}")
         result_queue.put(("done", device))
         return
 
+    log("Model loaded, starting inference.")
     for example in examples:
         result = _run_inference_example(
             model=model,
@@ -265,7 +280,7 @@ def _inference_worker(
         if result is not None:
             result_queue.put(("result", result))
 
-    logger.info("Worker finished on %s.", device)
+    log("Worker finished.")
     result_queue.put(("done", device))
 
 
@@ -362,7 +377,9 @@ def run_inference(
     while active_devices:
         try:
             item_type, payload = result_queue.get(timeout=1.0)
-            if item_type == "result":
+            if item_type == "log":
+                tqdm.write(payload)
+            elif item_type == "result":
                 result = payload
                 unique_id = result["unique_id"]
                 if unique_id in done_ids:
@@ -387,9 +404,9 @@ def run_inference(
 
     pbar.close()
 
-    for _, process in workers:
-        process.join()
-
+    # Drain any remaining buffered items before joining. Joining first causes a
+    # deadlock: workers block waiting for the queue pipe to drain, but the main
+    # process has stopped reading and is waiting on join().
     while True:
         try:
             item_type, payload = result_queue.get_nowait()
@@ -403,6 +420,12 @@ def run_inference(
             done_ids.add(unique_id)
         except queue.Empty:
             break
+
+    for _, process in workers:
+        process.join(timeout=30)
+        if process.is_alive():
+            logger.warning("Worker did not exit cleanly; terminating.")
+            process.terminate()
 
     save_results(results, output_json_path)
     return results
