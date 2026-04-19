@@ -93,22 +93,23 @@ let bridgeStartTime = Date.now();
 const costAccumulator = {
   role:  ROLE,
   model: MODEL,
-  response_count:      0,
-  input_text_tokens:   0,
-  input_audio_tokens:  0,
-  input_cached_tokens: 0,
-  output_text_tokens:  0,
-  output_audio_tokens: 0,
+  response_count:            0,
+  input_text_tokens:         0,
+  input_audio_tokens:        0,
+  input_cached_tokens:       0,
+  input_cached_audio_tokens: 0,
+  output_text_tokens:        0,
+  output_audio_tokens:       0,
   responses: [],
 };
 
 const PRICING_PER_1M = {
   input_text:   5.00,
-  input_audio:  100.00,
+  input_audio:  40.00,
   cached_text:  2.50,
   cached_audio: 20.00,
   output_text:  20.00,
-  output_audio: 200.00,
+  output_audio: 80.00,
 };
 
 function recordUsage(evt) {
@@ -116,21 +117,26 @@ function recordUsage(evt) {
   if (!usage) return;
   const itd = usage.input_token_details  || {};
   const otd = usage.output_token_details || {};
-  costAccumulator.response_count      += 1;
-  costAccumulator.input_text_tokens   += itd.text_tokens   || 0;
-  costAccumulator.input_audio_tokens  += itd.audio_tokens  || 0;
-  costAccumulator.input_cached_tokens += itd.cached_tokens || 0;
-  costAccumulator.output_text_tokens  += otd.text_tokens   || 0;
-  costAccumulator.output_audio_tokens += otd.audio_tokens  || 0;
+  const ctd = itd.cached_tokens_details  || {};
+  costAccumulator.response_count            += 1;
+  costAccumulator.input_text_tokens         += itd.text_tokens   || 0;
+  costAccumulator.input_audio_tokens        += itd.audio_tokens  || 0;
+  costAccumulator.input_cached_tokens       += itd.cached_tokens || 0;
+  costAccumulator.input_cached_audio_tokens += ctd.audio_tokens  || 0;
+  costAccumulator.output_text_tokens        += otd.text_tokens   || 0;
+  costAccumulator.output_audio_tokens       += otd.audio_tokens  || 0;
   costAccumulator.responses.push({ response_id: evt.response?.id, usage });
 }
 
 function writeCostMetadata() {
   const acc = costAccumulator;
+  const cachedTextTokens  = acc.input_cached_tokens - acc.input_cached_audio_tokens;
+  const cachedAudioTokens = acc.input_cached_audio_tokens;
   const estimated_cost_usd = (
     acc.input_text_tokens   * PRICING_PER_1M.input_text   / 1e6 +
     acc.input_audio_tokens  * PRICING_PER_1M.input_audio  / 1e6 +
-    acc.input_cached_tokens * PRICING_PER_1M.cached_text  / 1e6 +
+    cachedTextTokens        * PRICING_PER_1M.cached_text  / 1e6 +
+    cachedAudioTokens       * PRICING_PER_1M.cached_audio / 1e6 +
     acc.output_text_tokens  * PRICING_PER_1M.output_text  / 1e6 +
     acc.output_audio_tokens * PRICING_PER_1M.output_audio / 1e6
   );
