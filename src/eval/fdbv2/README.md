@@ -51,10 +51,10 @@ Moshi runs as a local WebSocket server. Because each server instance handles **o
 ```bash
 # Example: 6 instances on GPUs 0, 1, 2 (2 per GPU), starting at port 9100
 python launch_moshi_servers.py \
-    --num-instances 6 \
-    --gpu-ids 0,1,2 \
+    --num-instances 8 \
+    --gpu-ids 4,5,6,7 \
     --base-port 9100 \
-    --hf-repo kyutai/moshi-2-0-80m
+    --hf-repo kyutai/moshiko-pytorch-bf16
 ```
 
 The script prints a `✓` for each server once the model has loaded and is ready to accept connections (this can take a few minutes). **Keep this terminal open** — it holds the server processes alive.
