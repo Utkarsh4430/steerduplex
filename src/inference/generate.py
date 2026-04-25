@@ -266,11 +266,27 @@ class MoshiInference:
         max_samples = int(max_duration_sec * self.sample_rate)
         if user_audio.shape[-1] > max_samples:
             user_audio = user_audio[:, :max_samples]
-        total_target_samples = user_audio.shape[-1]
+        elif user_audio.shape[-1] < max_samples:
+            # Pad trailing silence so Moshi gets up to `max_duration_sec` of steps
+            # to generate its response. Moshi perceives post-user silence as
+            # "user stopped talking — my turn".
+            silence = np.zeros(
+                (user_audio.shape[0], max_samples - user_audio.shape[-1]),
+                dtype=user_audio.dtype,
+            )
+            user_audio = np.concatenate([user_audio, silence], axis=-1)
 
         # Stream and collect output
         output_frames = []
         text_tokens = []
+
+        # Early-stop once the model has spoken and then been silent for 5s straight.
+        # Moshi is a continuous-conversation model, so [EOS] is unreliable in one-shot QA.
+        SILENCE_TEXT_IDS = {0, 2, 3}  # [EPAD], [EOS], [PAD]
+        silence_stop_frames = int(self.mimi.frame_rate * 5.0)
+        seen_speech = False
+        consecutive_silence = 0
+        early_stopped = False
 
         for user_encoded in encode_from_sphn(
             self.mimi,
@@ -288,21 +304,22 @@ class MoshiInference:
                 # Collect text token
                 text_tok = tokens[0, 0, 0].item()
                 text_tokens.append(text_tok)
+                if text_tok in SILENCE_TEXT_IDS:
+                    consecutive_silence += 1
+                else:
+                    seen_speech = True
+                    consecutive_silence = 0
+                if seen_speech and consecutive_silence >= silence_stop_frames:
+                    early_stopped = True
+                    break
+            if early_stopped:
+                break
 
         if not output_frames:
             logger.warning("No output frames generated")
             return np.zeros(self.sample_rate, dtype=np.float32), self.sample_rate, []
 
         output_audio = np.concatenate(output_frames, axis=-1)
-
-        # Trim/pad to match input duration
-        if output_audio.shape[-1] > total_target_samples:
-            output_audio = output_audio[:total_target_samples]
-        elif output_audio.shape[-1] < total_target_samples:
-            output_audio = np.concatenate([
-                output_audio,
-                np.zeros(total_target_samples - output_audio.shape[-1], dtype=output_audio.dtype),
-            ])
 
         # Decode text tokens to strings
         text_strs = []

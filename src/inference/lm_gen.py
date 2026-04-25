@@ -148,6 +148,7 @@ class _LMGenState:
     provided: torch.Tensor    # [B, num_codebooks, max_delay+3] bool
     initial: torch.Tensor     # [B, num_codebooks, 1]
     graphed_main: CUDAGraphed
+    graphed_embeddings: CUDAGraphed
     graphed_depth: CUDAGraphed
     offset: int = 0
 
@@ -242,12 +243,15 @@ class LMGen(StreamingModule[_LMGenState]):
 
         disable = device.type != "cuda"
         graphed_main = CUDAGraphed(lm_model.forward_text, disable=disable)
+        graphed_embeddings = CUDAGraphed(self._forward_embeddings, disable=disable)
         graphed_depth = CUDAGraphed(self.depformer_step, disable=disable)
 
         return _LMGenState(
             batch_size=batch_size, device=device, cache=cache,
             provided=provided, initial=initial,
-            graphed_main=graphed_main, graphed_depth=graphed_depth,
+            graphed_main=graphed_main,
+            graphed_embeddings=graphed_embeddings,
+            graphed_depth=graphed_depth,
         )
 
     # ------------------------------------------------------------------
@@ -345,6 +349,47 @@ class LMGen(StreamingModule[_LMGenState]):
 
         transformer_out, text_logits = state.graphed_main(input_)
 
+        return self._process_output(
+            transformer_out, text_logits, provided_, target_, model_pos, target_pos,
+        )
+
+    def _forward_embeddings(self, input_: torch.Tensor):
+        """Run the main transformer + text head on a pre-computed embedding tensor.
+
+        Mirrors PersonaPlex LMModel.forward_embeddings — skips the code→embedding
+        step so that saved voice-prompt embeddings can be replayed through the
+        transformer (re-establishing its streaming KV state).
+        """
+        lm = self.lm_model
+        transformer_out = lm.transformer(input_)
+        if lm.out_norm is not None:
+            transformer_out = lm.out_norm(transformer_out)
+        text_logits = lm.text_linear(transformer_out)[:, None]
+        return transformer_out, text_logits
+
+    @torch.no_grad()
+    def step_embeddings(self, embeddings: torch.Tensor) -> torch.Tensor | None:
+        """Advance one step by feeding pre-computed embeddings to the transformer.
+
+        Used to replay saved voice-prompt embeddings on the .pt load path.
+        Matches PersonaPlex step_embeddings: dummy tokens satisfy the cache-write
+        invariants in prepare_step_input, but the transformer is driven by the
+        embeddings argument (not a cache read).
+        """
+        state = self._streaming_state
+        lm = self.lm_model
+        needed = lm.num_codebooks - AUDIO_TOKENS_PER_STREAM - 1
+        dummy = lm._get_initial_token()
+        while True:
+            prepared = self.prepare_step_input(
+                input_tokens=dummy[:, 1:1 + needed],
+                moshi_tokens=dummy[:, 1 + needed:],
+                text_token=self.zero_text_code,
+            )
+            if prepared is not None:
+                break
+        _, provided_, target_, model_pos, target_pos = prepared
+        transformer_out, text_logits = state.graphed_embeddings(embeddings)
         return self._process_output(
             transformer_out, text_logits, provided_, target_, model_pos, target_pos,
         )
@@ -460,11 +505,12 @@ class LMGen(StreamingModule[_LMGenState]):
             return
 
         if self.voice_prompt_embeddings is not None:
-            # Replay saved embeddings (fast path)
-            # Note: step_embeddings requires forward_embeddings which isn't in
-            # upstream moshi. Fall back to re-encoding from cache.
-            state = self._streaming_state
-            state.cache.copy_(self.voice_prompt_cache)
+            # Replay saved embeddings through the transformer to re-establish its
+            # streaming KV state and advance state.offset past the offset==0
+            # sentinel branch, then overlay the stored LMGen cache.
+            for next_embed in self.voice_prompt_embeddings:
+                self.step_embeddings(next_embed)
+            self._streaming_state.cache.copy_(self.voice_prompt_cache)
             return
 
         # Encode voice prompt through Mimi
