@@ -1,7 +1,7 @@
-parallel_sessions: 16
+parallel_sessions: 8
 num_samples: -1
 conversation_duration: 120
-output_dir: /mnt/efs/ramaneswaranselvakumar/projects/steerduplex/artifacts/evaluation_outputs/full_duplex_bench_v2/slow_examiner_full_v3_20260406_235311
+output_dir: /mnt/efs/ramaneswaranselvakumar/projects/steerduplex/artifacts/evaluation_outputs/full_duplex_bench_v2/moshi/slow_examiner
 
 splits:
   - Daily
@@ -40,12 +40,12 @@ examinee_adapter:
       - ws://localhost:9105/api/chat
       - ws://localhost:9106/api/chat
       - ws://localhost:9107/api/chat
-      - ws://localhost:9108/api/chat
-      - ws://localhost:9109/api/chat
-      - ws://localhost:9110/api/chat
-      - ws://localhost:9111/api/chat
-      - ws://localhost:9112/api/chat
-      - ws://localhost:9113/api/chat
-      - ws://localhost:9114/api/chat
-      - ws://localhost:9115/api/chat
+      # - ws://localhost:9108/api/chat
+      # - ws://localhost:9109/api/chat
+      # - ws://localhost:9110/api/chat
+      # - ws://localhost:9111/api/chat
+      # - ws://localhost:9112/api/chat
+      # - ws://localhost:9113/api/chat
+      # - ws://localhost:9114/api/chat
+      # - ws://localhost:9115/api/chat
     url_arg: moshiUrl

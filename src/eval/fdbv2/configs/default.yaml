@@ -29,6 +29,22 @@ models:
 
 # --- Examiner (GPT Realtime) settings ---
 examiner_vad_mode: slow   # "slow" (patient, allows interruption) or "fast" (stricter threshold)
+# Reference: turn_detection presets that each vad_mode expands to inside
+# adapters/gptRealtime_adapter.js (shown here only for documentation /
+# comparison with the official FDB v2 — do not uncomment, no effect).
+#
+# slow (default):
+#   type: server_vad
+#   create_response: true
+#   interrupt_response: true
+#
+# fast:
+#   type: server_vad
+#   create_response: true
+#   interrupt_response: false
+#   threshold: 0.6
+#   prefix_padding_ms: 1200
+#   silence_duration_ms: 600
 voices:
   examiner: echo           # OpenAI Realtime voice for the examiner
 
@@ -38,7 +54,7 @@ eval:
   judge_model: gemini/gemini-2.5-pro  # LiteLLM model name for LLM-as-judge
   max_workers: 10                     # parallel judge API calls
   trim_seconds: 120                   # trim A.wav / B.wav / combined.wav to this length
-  whisper_model: large-v3             # WhisperX model for ASR
+  asr_device: cuda:0                  # device for Parakeet ASR (nvidia/parakeet-tdt-0.6b-v2 via NeMo)
 
 # --- Examinee system prompt ---
 # The examiner prompt comes from the dataset (per-task); this is the fixed examinee prompt.

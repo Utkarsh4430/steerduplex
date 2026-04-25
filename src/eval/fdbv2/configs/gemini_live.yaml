@@ -38,7 +38,7 @@ eval:
   judge_model: gemini/gemini-2.5-pro  # LiteLLM model name for LLM-as-judge
   max_workers: 10                     # parallel judge API calls
   trim_seconds: 120                   # trim A.wav / B.wav / combined.wav to this length
-  whisper_model: large-v3             # WhisperX model for ASR
+  asr_device: cuda:0                  # device for Parakeet ASR (nvidia/parakeet-tdt-0.6b-v2 via NeMo)
 
 # --- Examinee system prompt ---
 # The examiner prompt comes from the dataset (per-task); this is the fixed examinee prompt.

@@ -247,7 +247,7 @@ def run_prep(tasks: List[Dict], prompts_file: Path, trim_seconds: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — ASR (WhisperX)
+# Stage 2 — ASR (Parakeet / NeMo)
 # ---------------------------------------------------------------------------
 
 def _segment_sentences(chunks: List[Dict], gap_threshold: float = 1.2) -> List[Dict]:
@@ -281,30 +281,68 @@ def _combine_transcripts(a_json: Path, b_json: Path, max_time: float = 120.0) ->
     return [{"speaker": s["speaker"], "text": s["text"]} for s in merged]
 
 
-def _transcribe_pair(task: Dict, model: Any, align_model: Any, align_metadata: Any,
-                     lang: str, batch_size: int, device: str) -> None:
-    import whisperx  # imported here so the rest of the script works without it
+_PARAKEET_MODEL = None
+
+
+def _load_parakeet(device: str):
+    """Lazy-load NVIDIA Parakeet-TDT-0.6B-v2 on the requested device."""
+    global _PARAKEET_MODEL
+    if _PARAKEET_MODEL is not None:
+        return _PARAKEET_MODEL
+    import nemo.collections.asr as nemo_asr
+    model = nemo_asr.models.ASRModel.from_pretrained(
+        model_name="nvidia/parakeet-tdt-0.6b-v2"
+    )
+    try:
+        model = model.to(device)
+    except Exception:
+        model = model.cuda()
+    _PARAKEET_MODEL = model
+    return _PARAKEET_MODEL
+
+
+def _transcribe_pair(task: Dict, model: Any) -> None:
+    import soundfile as sf
 
     task_dir = task["task_dir"]
     for wav_name, json_name in [("A.wav", "A.json"), ("B.wav", "B.json")]:
         json_path = task_dir / json_name
         if json_path.exists():
             continue
-        audio = whisperx.load_audio(str(task_dir / wav_name))
-        result = model.transcribe(audio, batch_size=batch_size, language=lang)
-        result = whisperx.align(
-            result["segments"], align_model, align_metadata, audio, device,
-            return_char_alignments=False,
-        )
-        chunks, words = [], []
-        for seg in result["segments"]:
-            for word in seg.get("words", []):
-                s, e = word.get("start"), word.get("end")
-                if s is None or e is None:
-                    continue
-                words.append(word["word"])
-                chunks.append({"text": word["word"], "timestamp": [s, e]})
-        json_path.write_text(json.dumps({"text": " ".join(words), "chunks": chunks}, indent=2))
+
+        waveform, sr = sf.read(str(task_dir / wav_name))
+        if waveform.ndim > 1:
+            waveform = waveform.mean(axis=1)
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            sf.write(tmp_path, waveform, sr)
+            asr_outputs = model.transcribe([tmp_path], timestamps=True)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        chunks, text_parts = [], []
+        if asr_outputs:
+            result = asr_outputs[0]
+            word_timestamps = (
+                result.timestamp.get("word", [])
+                if hasattr(result, "timestamp") else []
+            )
+            for w in word_timestamps:
+                word = w["word"]
+                chunks.append({
+                    "text": word,
+                    "timestamp": [float(w["start"]), float(w["end"])],
+                })
+                text_parts.append(word)
+
+        json_path.write_text(json.dumps(
+            {"text": " ".join(text_parts).strip(), "chunks": chunks}, indent=2
+        ))
 
     transcripts_path = task_dir / "transcripts.json"
     if not transcripts_path.exists():
@@ -322,21 +360,20 @@ def _fmt_duration(seconds: float) -> str:
     return f"{m:02d}:{sec:02d}"
 
 
-def run_asr(tasks: List[Dict], whisper_model: str = "large-v3",
-            lang: str = "en", batch_size: int = 16) -> None:
+def run_asr(tasks: List[Dict], device: str = "cuda:0") -> None:
     n = len(tasks)
-    print(f"\n[Stage 2] ASR transcription — {n} task(s), model={whisper_model}")
+    model_name = "nvidia/parakeet-tdt-0.6b-v2"
+    print(f"\n[Stage 2] ASR transcription — {n} task(s), model={model_name}")
     try:
-        import whisperx
+        import nemo.collections.asr  # noqa: F401
     except ImportError:
-        print("  ERROR: whisperx not installed. Run: pip install whisperx")
+        print("  ERROR: nemo_toolkit[asr] not installed. "
+              "Run evaluate.py under the raman_fdb_v1 conda env.")
         sys.exit(1)
 
-    device = "cuda"
-    print(f"  Loading WhisperX '{whisper_model}' ...", flush=True)
-    model = whisperx.load_model(whisper_model, device, compute_type="float16", language=lang)
-    align_model, align_metadata = whisperx.load_align_model(language_code=lang, device=device)
-    print("  Models loaded. Starting transcription ...\n")
+    print(f"  Loading Parakeet '{model_name}' on {device} ...", flush=True)
+    model = _load_parakeet(device)
+    print("  Model loaded. Starting transcription ...\n")
 
     ok = failed = 0
     width = len(str(n))
@@ -349,7 +386,7 @@ def run_asr(tasks: List[Dict], whisper_model: str = "large-v3",
         t0 = time.time()
         error_msg: Optional[str] = None
         try:
-            _transcribe_pair(task, model, align_model, align_metadata, lang, batch_size, device)
+            _transcribe_pair(task, model)
             ok += 1
         except Exception as e:
             error_msg = str(e)
@@ -985,7 +1022,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     judge_model: str  = eval_cfg.get("judge_model", "gemini/gemini-2.5-pro")
     max_workers: int  = int(eval_cfg.get("max_workers", 10))
     trim_seconds: int = int(eval_cfg.get("trim_seconds", 120))
-    whisper_model: str = eval_cfg.get("whisper_model", "large-v3")
+    asr_device: str = eval_cfg.get("asr_device", "cuda:0")
 
     litellm_base = normalize_litellm_base(cfg["litellm"]["base_url"])
     litellm_key = os.environ.get("LITELLM_API_KEY", "")
@@ -1011,7 +1048,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Stage 2 — ASR
     asr_tasks = tasks if "2" in force else [t for t in tasks if needs_asr(t)]
     if asr_tasks:
-        run_asr(asr_tasks, whisper_model=whisper_model)
+        run_asr(asr_tasks, device=asr_device)
     else:
         print("\n[Stage 2] ASR — all transcripts present, skipping")
 
