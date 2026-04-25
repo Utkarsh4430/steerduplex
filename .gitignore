@@ -77,6 +77,7 @@ eval_outputs/
 src/eval_outputs/
 src/fdbench/
 src/data/benchmarks/
+src/eval/fdb_v1/data/
 
 # WandB reports (PDFs)
 *.pdf
