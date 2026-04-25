@@ -19,10 +19,10 @@ set -euo pipefail
 # =============================================================================
 # MANDATORY — edit these before running
 # =============================================================================
-MODEL_NAME="moshiko"                                  # label stored in run_meta.json
-OUT_ROOT="/mnt/efs/ramaneswaranselvakumar/projects/steerduplex/artifacts/evaluation_outputs/fdb_v1/moshiko" # where all outputs go
+MODEL_NAME="full_v3_20260406_235311"                                  # label stored in run_meta.json
+OUT_ROOT="/mnt/efs/ramaneswaranselvakumar/projects/steerduplex/artifacts/evaluation_outputs/fdb_v1/full_v3_20260406_235311" # where all outputs go
 LITELLM_BASE_URL="https://litellm-proxy.ml-serving-internal.scale.com/v1"         # LiteLLM proxy base URL
-LITELLM_API_KEY="ADD_KEY_HERE"                            # LiteLLM API key
+LITELLM_API_KEY="<LITELLM_API_KEY>"                            # LiteLLM API key
 
 # Moshi server URLs. Required for the inference stage. Accepts:
 #   - Port ranges     : "9001-9010"                              (10 servers, host=$SERVER_HOST)
@@ -32,7 +32,7 @@ LITELLM_API_KEY="ADD_KEY_HERE"                            # LiteLLM API key
 # Launch servers first via:
 #   conda run -n raman_steerduplex python -m eval.fdb_v1.launch_moshi_servers \
 #       --num-instances 10 --gpu-ids 0,1,2,3 --base-port 9001 --hf-repo "$HF_REPO"
-SERVER_PORTS="9100-9107"                                        # e.g. "9001-9010"
+SERVER_PORTS="9100-9113"                                        # e.g. "9001-9010"
 SERVER_HOST="localhost"                                # host applied when SERVER_PORTS uses bare ports
 
 # =============================================================================

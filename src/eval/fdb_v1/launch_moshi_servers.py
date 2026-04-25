@@ -106,6 +106,12 @@ def main() -> None:
                         help="CFG coefficient (forwarded to moshi_server.py).")
     parser.add_argument("--half", action="store_true", default=False,
                         help="Use float16 instead of bfloat16 (forwarded to moshi_server.py).")
+    parser.add_argument("--text-prompt", type=str, default=None,
+                        help="System prompt text, applied identically across all spawned "
+                             "instances (forwarded to moshi_server.py).")
+    parser.add_argument("--voice-prompt", type=str, default=None,
+                        help="Path to voice prompt WAV or .pt, applied identically across "
+                             "all spawned instances (forwarded to moshi_server.py).")
 
     parser.add_argument("--output-json", type=str, default=None,
                         help="If set, write the list of server URLs to this JSON file once all are healthy.")
@@ -140,6 +146,10 @@ def main() -> None:
         passthrough += ["--cfg-coef", str(args.cfg_coef)]
     if args.half:
         passthrough += ["--half"]
+    if args.text_prompt is not None:
+        passthrough += ["--text-prompt", args.text_prompt]
+    if args.voice_prompt is not None:
+        passthrough += ["--voice-prompt", args.voice_prompt]
 
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)

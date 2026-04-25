@@ -23,8 +23,7 @@ import sentencepiece
 from safetensors.torch import load_file
 import sphn
 import torch
-from moshi.models import LMGen, loaders
-from moshi.run_inference import get_condition_tensors
+from moshi.models import loaders
 
 try:
     from .client_utils import log
@@ -35,6 +34,24 @@ try:
     from .personaplex_loader import is_personaplex, load_personaplex_lm
 except ImportError:
     from personaplex_loader import is_personaplex, load_personaplex_lm
+
+# Use the steerduplex-ported LMGen (inference.lm_gen), which supports the
+# PersonaPlex 4-phase prompt injection (step_system_prompts) and the
+# step_embeddings replay path for .pt voice prompts. The upstream
+# moshi.models.LMGen does neither.
+try:
+    from inference.lm_gen import LMGen
+except ImportError:
+    import pathlib as _pathlib
+    sys.path.insert(0, str(_pathlib.Path(__file__).resolve().parents[2]))
+    from inference.lm_gen import LMGen
+
+
+def wrap_with_system_tags(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("<system>") and cleaned.endswith("<system>"):
+        return cleaned
+    return f"<system> {cleaned} <system>"
 
 # mimi.set_num_codebooks(8) is always called at load time; decode uses only
 # the first 8 audio codebooks regardless of the model's dep_q value.
@@ -138,16 +155,51 @@ class ServerState:
     lock: asyncio.Lock
 
     def __init__(self, model_type: str, mimi: Any, text_tokenizer: sentencepiece.SentencePieceProcessor,
-                 lm: Any, cfg_coef: float, device: str | torch.device, **kwargs):
+                 lm: Any, device: str | torch.device,
+                 text_prompt: str = "", voice_prompt: str | None = None):
         self.model_type = model_type
         self.mimi = mimi
         self.text_tokenizer = text_tokenizer
-        condition_tensors = get_condition_tensors(model_type, lm, batch_size=1, cfg_coef=cfg_coef)
-        self.lm_gen = LMGen(lm, cfg_coef=cfg_coef, condition_tensors=condition_tensors, **kwargs)
 
         self.device = device
         self.frame_size = int(self.mimi.sample_rate / self.mimi.frame_rate)
         self.lock = asyncio.Lock()
+
+        self.lm_gen = LMGen(
+            lm,
+            device=device,
+            use_sampling=True,
+            temp=0.8,
+            temp_text=0.7,
+            top_k=250,
+            top_k_text=25,
+            audio_silence_frame_cnt=int(0.5 * self.mimi.frame_rate),
+            sample_rate=self.mimi.sample_rate,
+            frame_rate=self.mimi.frame_rate,
+        )
+
+        # Load persona once at startup. text_prompt_tokens and voice_prompt_*
+        # are read by step_system_prompts on every new connection, so a
+        # per-server fixed persona is bit-equivalent to PersonaPlex's
+        # per-request query-string mechanism when the persona doesn't change.
+        if text_prompt:
+            self.lm_gen.text_prompt_tokens = self.text_tokenizer.encode(
+                wrap_with_system_tags(text_prompt)
+            )
+            log("info", f"text prompt set ({len(self.lm_gen.text_prompt_tokens)} tokens)")
+        else:
+            self.lm_gen.text_prompt_tokens = None
+
+        if voice_prompt:
+            vp = Path(voice_prompt)
+            if not vp.exists():
+                raise FileNotFoundError(f"voice prompt not found: {vp}")
+            if vp.suffix == ".pt":
+                self.lm_gen.load_voice_prompt_embeddings(str(vp))
+                log("info", f"voice prompt loaded from embeddings {vp.name}")
+            else:
+                self.lm_gen.load_voice_prompt(str(vp))
+                log("info", f"voice prompt loaded from audio {vp.name}")
 
         self.mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
@@ -255,6 +307,12 @@ class ServerState:
             opus_reader = sphn.OpusStreamReader(self.mimi.sample_rate)
             self.mimi.reset_streaming()
             self.lm_gen.reset_streaming()
+            # Inject persona (voice → silence → text → silence) before any
+            # user audio. Reset mimi afterward so its encoder streaming state
+            # doesn't carry over from voice-prompt encoding. Matches
+            # inference/generate.py:254-256.
+            self.lm_gen.step_system_prompts(self.mimi)
+            self.mimi.reset_streaming()
             # Send the handshake.
             await ws.send_bytes(b"\x00")
             await self.recv_loop(ws, opus_reader, opus_writer)
@@ -279,8 +337,16 @@ def main():
                              "Use this to select a different pre-trained model.")
     parser.add_argument("--lora-weight", type=str, help="Path to a local checkpoint file for LoRA.", default=None)
     parser.add_argument("--config-path", type=str, help="Path to a local config file.", default=None)
-    parser.add_argument("--cfg-coef", type=float, default=1., help="CFG coefficient.")
+    parser.add_argument("--cfg-coef", type=float, default=1.,
+                        help="CFG coefficient. Ignored (steerduplex LMGen does not support CFG); "
+                             "kept for CLI back-compat.")
     parser.add_argument("--device", type=str, default="cuda", help="Device on which to run, defaults to 'cuda'.")
+    parser.add_argument("--text-prompt", type=str, default="",
+                        help="System prompt text. Wrapped with <system> tags and injected "
+                             "once at the start of every new connection.")
+    parser.add_argument("--voice-prompt", type=str, default=None,
+                        help="Path to a voice prompt WAV or .pt embeddings file. "
+                             "Injected once at the start of every new connection.")
     parser.add_argument("--no_fuse_lora", action="store_false", dest="fuse_lora", default=True,
                         help="Do not fuse LoRA layers intot Linear layers.")
     parser.add_argument("--half", action="store_const", const=torch.float16, default=torch.bfloat16,
@@ -337,8 +403,13 @@ def main():
     )
     log("info", "moshi loaded")
 
-    state = ServerState(checkpoint_info.model_type, mimi, text_tokenizer, lm, args.cfg_coef, args.device,
-                        **checkpoint_info.lm_gen_config)
+    if args.cfg_coef != 1.0:
+        log("warning", f"--cfg-coef={args.cfg_coef} ignored: steerduplex LMGen does not support CFG.")
+    state = ServerState(
+        checkpoint_info.model_type, mimi, text_tokenizer, lm, args.device,
+        text_prompt=args.text_prompt,
+        voice_prompt=args.voice_prompt,
+    )
     log("info", "warming up the model")
     state.warmup()
     app = web.Application()
