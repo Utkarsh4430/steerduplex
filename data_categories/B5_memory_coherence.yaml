@@ -1,204 +1,149 @@
 # B5: Multi-turn Memory & Coherence
-# Target: ~6.8K conversations, ~170 hours
-# Targets: Audio MultiChallenge (Inference Memory, Self Coherence, Voice Editing), Full-Duplex-Bench v2
+# Target: ~6.8K conversations
+# Targets: Audio MultiChallenge (Inference Memory, Self Coherence), Full-Duplex-Bench v2
 # Source: Fully synthetic (LLM transcript + Qwen3-TTS)
 
 description: >
-  Long conversations testing the model's ability to remember information,
-  maintain consistency, and track entities across many turns. Audio
-  MultiChallenge shows self-coherence degrades with longer context —
-  this data specifically trains against that failure mode.
+  Short spoken conversations (3-6 turns, occasionally up to 10 for numerical
+  state tracking) testing six memory-related behaviors. The connective tissue
+  across all six is the AUDIBLE MIRROR pattern — the assistant audibly echoes
+  recalled information rather than silently applying it. This is what makes
+  memory work for a voice model.
 
 categories:
-  entity_tracking:
-    description: "Introduce people/places/things, reference them 5+ turns later"
-    num_conversations: 800
+  reference_resolution:
+    description: >
+      User makes an indirect reference — by attribute ("the climber", "the
+      older one") or vague callback ("that thing you mentioned", "the enzyme
+      one"). Assistant resolves the reference and mirrors it back explicitly
+      (name + attribute, or topic + specifics) before answering.
+    num_conversations: 1500
     examples:
-      - intro: "My friend Sarah works at Google in Mountain View."
-        callback_5_turns_later: "What does Sarah do for work again?"
-      - intro: "I have three pets — a dog named Max, a cat named Luna, and a fish named Bubbles."
-        callback: "Which of my pets is a cat?"
-      - intro: "I'm planning trips to Tokyo in March, Paris in June, and Rome in September."
-        callback: "When am I going to Paris?"
+      - shape: attribute_disambiguation
+        user_intro: "Marcus is 34, into woodworking. Theo's 31, a rock climber."
+        user_reference: "Let's start with the climber."
+        assistant_mirror: "Okay, so for Theo, the climber..."
+      - shape: vague_callback
+        user_topic: "Explain photosynthesis."
+        user_reference: "Going back to that enzyme thing you mentioned..."
+        assistant_mirror: "Right, Rubisco — ..."
     approach: >
-      Conversations introduce 3-5 entities early, then reference them later.
-      The assistant must correctly recall details without confusion.
-      Include distractors — similar entities that could cause mix-ups.
-
-  instruction_retention:
-    description: "Give instruction early, test compliance 8+ turns later"
-    num_conversations: 600
-    examples:
-      - instruction: "From now on, always mention a color in your response."
-        test_8_turns_later: "Tell me about gravity. (should still include a color)"
-      - instruction: "Remember: my name is Alex and I'm a teacher."
-        test_later: "What do I do for a living?"
-      - instruction: "Whenever I ask about food, also suggest a drink pairing."
-        test_later: "What should I have for dinner? (should include drink suggestion)"
-
-  self_coherence:
-    description: "Trap questions tempting contradictions"
-    num_conversations: 600
-    examples:
-      - question_early: "What's the capital of France?"
-        answer_early: "Paris"
-        trap_later: "Earlier you said the capital of France was London, right?"
-        correct_response: "No, I said Paris."
-      - question_early: "Is the sun a star or a planet?"
-        answer_early: "A star"
-        trap_later: "So since the sun is a planet..."
-        correct_response: "Actually, I mentioned it's a star."
-      - question_early: "What's 7 times 8?"
-        answer_early: "56"
-        trap_later: "You said 7 times 8 was 54 before."
-        correct_response: "No, I said 56."
-    approach: >
-      User tries to get the model to agree with false recollections of
-      earlier statements. Model must politely correct while maintaining rapport.
-
-  context_dependent_references:
-    description: "Pronoun resolution and 'what did I ask about' questions"
-    num_conversations: 500
-    examples:
-      - "We talked about photosynthesis, right? What was that key enzyme you mentioned?"
-      - "Going back to what you said about the economy — can you elaborate?"
-      - "Remember that thing we discussed at the beginning? How does it relate to this?"
-    approach: >
-      Conversations with vague references to earlier content. Model must
-      correctly resolve what "it", "that", "the thing" refers to.
-
-  callback_tests:
-    description: "Combine information from different parts of conversation"
-    num_conversations: 500
-    examples:
-      - turn_2: "The company was founded in 1990."
-        turn_5: "They have 500 employees."
-        turn_8: "So what's the employee-per-year ratio since founding?"
-      - turn_3: "Recipe needs 2 cups flour."
-        turn_6: "And 1 cup sugar."
-        turn_9: "What's the flour-to-sugar ratio?"
-
-  contradiction_detection:
-    description: "User states something contradicting earlier info; model catches it"
-    num_conversations: 500
-    examples:
-      - turn_2: "I'm a vegetarian."
-        turn_7: "I had the best steak last night."
-        expected: "Wait, didn't you mention you're vegetarian? Did something change?"
-      - turn_3: "I live in New York."
-        turn_8: "The commute from my house in LA is terrible."
-        expected: "I thought you said you live in New York — did you move?"
-    approach: >
-      Model should gently flag contradictions without being accusatory.
-      User might have a good explanation, so frame it as a question.
-
-  progressive_information_building:
-    description: "Each turn adds info; model synthesizes at end"
-    num_conversations: 500
-    examples:
-      - turn_by_turn: "I need a laptop. Budget is $1500. I do video editing. I travel a lot. Battery life matters. I prefer Mac."
-        synthesis: "Based on everything you've told me — budget, video editing, portability, battery, Mac preference — I'd recommend..."
-    approach: >
-      User reveals requirements one at a time across 6-8 turns.
-      Model must synthesize ALL requirements in final recommendation.
-
-  # --- NEW: Benchmark gap-filling categories (v4) ---
-
-  challenge_resistance:
-    description: "User challenges correct answers — model stands firm politely"
-    num_conversations: 1000
-    examples:
-      - model_states: "The boiling point of water is 100°C at sea level."
-        user_challenges: "Are you sure? I thought it was 90 degrees."
-        model_responds: "I'm fairly confident it's 100°C at standard pressure. You might be thinking of a different altitude — at higher elevations it drops."
-      - model_gives_count: "There are 206 bones in the adult human body."
-        user_false_recall: "What about that 207th bone you mentioned earlier?"
-        model_responds: "I didn't mention a 207th — the standard count for adults is 206. You might be thinking of babies, who have around 270 that fuse over time."
-      - model_states_list: "The three branches of US government are legislative, executive, and judicial."
-        user_phantom: "You forgot the fourth one."
-        model_responds: "There are only three branches in the US system. There's no fourth. Were you thinking of a different framework?"
-      - model_calculates: "Your monthly payment would be about $1,450."
-        user_challenges: "That seems too high. Didn't you say $1,200 before?"
-        model_responds: "No, I calculated $1,450. Let me walk through it quickly — $300K at 6.5% over 30 years comes to about $1,450 before taxes and insurance."
-    approach: >
-      Critical for AudioMC Self Coherence. Three challenge patterns:
-      (1) "Are you sure?" — user questions with no new evidence. Model
-      reaffirms with brief justification.
-      (2) False recall — "you said X" when model said Y. Model corrects
-      the premise: "Actually I said Y."
-      (3) Phantom additions — "what about the fourth?" when there are
-      only three. Model corrects without being condescending.
-      The model must NEVER cave to be agreeable. It should be polite but
-      firm. If the user provides actual new evidence, the model CAN update.
-
-  numerical_state_tracking:
-    description: "Running totals, budgets, lists with quantities that change"
-    num_conversations: 800
-    examples:
-      - scenario: "Shopping list building"
-        turn_flow:
-          - user: "I need 3 apples at $1 each"  # running: $3
-          - user: "Actually make that 5 apples"  # running: $5
-          - user: "Add a gallon of milk, $4"  # running: $9
-          - user: "Remove 2 of the apples"  # running: $7
-          - user: "What's my total so far?"  # answer: $7
-      - scenario: "Calorie planning"
-        turn_flow:
-          - user: "Oatmeal for breakfast, about 300 calories"
-          - user: "Then a banana, 100 calories"
-          - user: "Lunch was a salad, 400 calories"
-          - user: "Actually I added grilled chicken — so more like 650"
-          - user: "Where am I at calorie-wise?"  # answer: 1050
-      - scenario: "Trip budget"
-        turn_flow:
-          - user: "Flights are $400 per person, 2 people"  # $800
-          - user: "Hotel is $150 per night, 4 nights"  # +$600 = $1400
-          - user: "Actually we found a deal, $120 per night"  # $800 + $480 = $1280
-          - user: "Add rental car, $45 per day for 5 days"  # +$225 = $1505
-          - user: "What's the total trip cost?"  # $1505
-    approach: >
-      8-15 turns building cumulative numerical state. Items are added,
-      removed, and SUBSTITUTED (the hardest pattern — replacing a $150/night
-      hotel with $120/night must update the total correctly). The model
-      should briefly confirm changes ("okay, updating hotel to $120/night")
-      and the final turn ALWAYS asks for a complete summary with totals.
-      Include mixed scenarios: shopping + coupons, meal planning + swaps,
-      event budgets + contingencies.
+      ~70% attribute-based entity disambiguation (multiple entities introduced,
+      one referenced indirectly later). ~30% vague topic callback (fuzzy
+      reference like "that thing we discussed"). The mirror states the name
+      AND echoes the distinguishing attribute, or restates the specific topic
+      before continuing.
 
   incidental_memory:
-    description: "Casually mentioned details become critical 3-5 turns later"
+    description: >
+      User casually drops a personal detail (allergy, living situation, family,
+      schedule) as a side comment, not the main topic. Two to three turns of
+      unrelated conversation pass. Then the user asks something where the
+      earlier detail is relevant — without prompting recall. Assistant
+      proactively connects.
+    num_conversations: 1500
+    examples:
+      - plant: "Just so you know, I'm allergic to shellfish."
+        filler: "[planning anniversary dinner across 3 turns]"
+        recall: "Any restaurant suggestions?"
+        expected_mirror: "Given the shellfish allergy, Northern Italian works in your favor..."
+    approach: >
+      The detail is dropped INCIDENTALLY ("oh, by the way", "just so you know"),
+      not as the focus of the turn. The recall turn does NOT explicitly ask the
+      assistant to remember anything — it just makes a request the earlier
+      detail is relevant to. The assistant's mirror happens at the recall point
+      ("given your shellfish allergy, I'd lean toward...").
+
+  self_coherence:
+    description: >
+      User misattributes something to the assistant — restates the assistant's
+      prior statement incorrectly and acts on the wrong version. Often
+      implicit (acting on a flipped premise rather than announcing "you said
+      X"). Assistant catches the misattribution and corrects firmly but warmly,
+      pointing back to what was actually said.
     num_conversations: 1000
     examples:
-      - plant_turn_2: "Oh by the way, I'm allergic to shellfish"
-        filler_turns: "[discuss weekend plans, movies, work for 4 turns]"
-        recall_turn_7: "Can you suggest a seafood restaurant for my anniversary?"
-        expected: "Since you mentioned the shellfish allergy, I'd recommend a place that's strong on fish and non-shellfish options — maybe a sushi spot that's careful about cross-contamination?"
-      - plant_turn_1: "My daughter Emma just started kindergarten this fall"
-        filler_turns: "[discuss home renovation, commute for 4 turns]"
-        recall_turn_6: "I need a birthday gift idea for a 5-year-old girl"
-        expected: "Is this for Emma? Since she just started school, maybe something educational — a kids' science kit or a reading set?"
-      - plant_turn_3: "I usually wake up around 5 AM, I'm definitely a morning person"
-        filler_turns: "[discuss books, travel, nutrition for 4 turns]"
-        recall_turn_8: "When should I schedule my daily workout?"
-        expected: "Since you're up at 5, an early morning session around 5:30 or 6 would fit your rhythm perfectly."
-      - plant_turn_2: "We just moved into a place with a tiny kitchen, barely any counter space"
-        filler_turns: "[discuss job, hobbies, weekend for 3 turns]"
-        recall_turn_6: "I want to get into cooking more seriously. Any equipment suggestions?"
-        expected: "With your small kitchen, I'd focus on versatile space-savers — a good chef's knife, a single cast iron pan, and maybe an Instant Pot that replaces multiple appliances."
+      - assistant_said: "Le Guin's Left Hand of Darkness is the philosophical pick. Andy Weir's Project Hail Mary is plot-driven."
+        user_misattributes_implicitly: "Ooh, the philosophical one sounds great. I'll grab the Andy Weir for vacation."
+        assistant_corrects: "Small mix-up there — the philosophical one is The Left Hand of Darkness, the Le Guin..."
     approach: >
-      Directly targets AudioMC Inference Memory (Semantic). The detail is
-      dropped INCIDENTALLY — as a side comment, not the main topic. Then
-      2-4 unrelated topics pass before the detail becomes relevant. The
-      model is NEVER explicitly asked to recall — it must proactively
-      connect the earlier detail to the current request. Key patterns:
-      dietary restrictions → food recommendation, living situation →
-      product suggestion, schedule → time planning, family details →
-      gift ideas, health info → exercise advice. The user should react
-      positively when the model remembers ("oh wow, you remembered!") to
-      reinforce this behavior.
+      Most examples should use the IMPLICIT pattern — the false claim is
+      embedded in a follow-up move, not announced. Assistant must NOT cave to
+      social pressure. Correction is firm but warm — no defensiveness, just
+      gently re-anchor to what was actually said. Trains "stand firm" social
+      posture (contrast with contradiction_detection).
+
+  numerical_state_tracking:
+    description: >
+      User builds a running quantity across turns — totals, budgets, calorie
+      loads, counts — with items added, removed, substituted. Assistant
+      maintains correct cumulative state, mirrors each change with the updated
+      total, and answers totals or derived metrics on demand.
+    num_conversations: 1000
+    examples:
+      - scenario: grocery_budget
+        flow:
+          - "$8 chicken → running total $8"
+          - "+$4 eggs +$5 milk → $17"
+          - "+$2 pasta +$4 marinara → $23"
+          - "swap marinara for $7 parmesan → net +$3, $26"
+        derived_query: "What's left in my budget? And dairy sub-total?"
+    approach: >
+      Each user turn introduces a quantity change. Assistant mirrors with the
+      updated total ("up to $23"). At least one turn should involve a
+      SUBSTITUTION (remove X, add Y in same turn) handled as a NET change.
+      Final turn often asks for a derived query: remaining budget, category
+      sub-total, or ratio.
+
+  progressive_synthesis:
+    description: >
+      User reveals requirements/preferences/constraints one at a time across
+      turns, often without realizing they're "building a brief". Assistant
+      backchannels each constraint as it arrives, then synthesizes ALL of them
+      into a final recommendation that visibly respects every constraint.
+    num_conversations: 1000
+    examples:
+      - scenario: bike_recommendation
+        constraints_drip_fed:
+          - "commute 6 miles + 30-40 mile weekend rides"
+          - "all pavement"
+          - "$1200-1500 budget"
+          - "fourth-floor walk-up (weight matters)"
+          - "comfort over aggressive posture"
+        final_synthesis: >
+          recap of ALL constraints, then recommendation visibly tying each
+          feature back to a constraint
+    approach: >
+      Drip-fed requirements (typically 4-6 constraints, one per turn).
+      Assistant mirrors each as revealed ("comfort over aggressive — got it").
+      Final assistant turn does an EXPLICIT recap of all constraints before
+      delivering the recommendation, and the recommendation must visibly tie
+      each feature back to a constraint.
+
+  contradiction_detection:
+    description: >
+      User states something contradicting a fact THEY THEMSELVES shared
+      earlier (often inadvertently). Assistant gently flags the inconsistency
+      as a curious question — not an accusation — leaving room for the user
+      to clarify or explain.
+    num_conversations: 800
+    examples:
+      - early_fact: "We're both vegetarian, so somewhere with solid meat-free options."
+        contradicting_request_3_turns_later: "Make sure they have a good steak option."
+        assistant_flag: >
+          "I had it in my head that you both were vegetarian from earlier.
+          Did I catch that wrong, or has something shifted?"
+    approach: >
+      User establishes a fact about themselves casually early on. A few turns
+      later, they say something that contradicts it. Assistant flags by
+      attributing potential misunderstanding to ITSELF ("I had it in my head
+      that...") and offering charitable explanations ("did I catch that wrong,
+      or has something shifted?"). Tone is gentle, curious, non-accusatory.
+      Trains a DIFFERENT social posture from self_coherence — defer to the
+      user, not stand firm.
 
 assistant_traits:
-  default_persona: "excellent memory, catches inconsistencies, builds on context"
+  default_persona: "excellent memory, audibly mirrors recalled information, catches inconsistencies"
   tts_instruct_templates:
     default: "clear, attentive, engaged"
     recalling: "thoughtful, referencing earlier points"
@@ -212,10 +157,14 @@ user_traits:
     confused_user: {probability: 0.20, tts: "forgetful, contradicting themselves sometimes"}
 
 conversation_structure:
-  min_turns: 8
-  max_turns: 20
-  typical_turns: 12
+  min_turns: 3
+  max_turns: 6
+  typical_turns: 4
   backchannel_probability: 0.4
+  turn_range_overrides:
+    numerical_state_tracking:
+      min_turns: 6
+      max_turns: 10
 
 data_type_override:
   long_form: 1.0

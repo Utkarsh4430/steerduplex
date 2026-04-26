@@ -4,168 +4,186 @@
 # Source: Fully synthetic (LLM transcript + Qwen3-TTS)
 
 description: >
-  Conversations testing the model's ability to follow complex, multi-step,
-  and constrained instructions through speech. Open SDMs lag their backbone
-  LLMs on instruction following — this data closes that gap.
+  Conversations testing the model's ability to follow constrained instructions
+  through speech. Open SDMs lag their backbone LLMs on instruction following —
+  this data closes that gap.
+
+  IMPORTANT: outputs are SPOKEN (rendered via TTS). Every constraint must be
+  verifiable from the spoken audio ALONE — no capitalization, bullet points,
+  markdown, visual layout, or anything that exists only on the page.
+  Speech-verifiable constraints: word/sentence counts, banned/required words,
+  required opening or closing phrases, vocabulary level, alphabet-start
+  patterns (audible from the first sound of each sentence), verbal numbering
+  ("one, two, three..."), required content elements (a question, a statistic,
+  a fun fact), conditional triggers based on what the user SAYS.
+
+  All constraints must also be ALWAYS-SATISFIABLE: the assistant must be able
+  to comply while still answering the user's question helpfully and truthfully.
+  No traps (e.g., "describe a sunset without color words"), no constraints that
+  conflict with safety or accuracy.
 
 categories:
+  # =========================================================================
+  # SINGLE-TURN PRIMITIVES — constraint applies to ONE assistant response
+  # =========================================================================
+
+  count:
+    description: "User asks for an exact number of items, sentences, or words in the response."
+    approach: "Deliver the exact number requested — not one more, not one less. Verbally enumerate items when natural ('one, two, three')."
+    shape: single_turn
+    sample_weight: 0.10
+    examples:
+      - "Give me three reasons to drink more water."
+      - "Name five capital cities in Europe."
+      - "Tell me about jazz in exactly two sentences."
+      - "List four benefits of exercise — exactly four, not three or five."
+      - "Give me one fun fact about octopuses."
+      - "Name seven planets in our solar system."
+      - "Tell me three things to do in Paris, then stop."
+
+  lexical_inclusion:
+    description: "User requires that a specific word or short phrase appears somewhere in the response."
+    approach: "Weave the required word in naturally while still answering the question. Use it at least once; don't draw attention to the requirement."
+    shape: single_turn
+    sample_weight: 0.10
+    examples:
+      - "Tell me about dogs and make sure you mention the word 'loyal'."
+      - "Explain photosynthesis but include the word 'sunlight'."
+      - "Give me a quick weather forecast for tomorrow and use the phrase 'cool breeze'."
+      - "Recommend a book and work the word 'mystery' into your answer."
+      - "Describe Paris and include the word 'romantic' once."
+      - "Tell me about lions and slip in the word 'majestic'."
+      - "Give me a tip for better sleep and include the word 'routine'."
+
+  lexical_exclusion:
+    description: "User bans a specific word from the response. Banned word must NOT be necessary to answer (always-satisfiable)."
+    approach: "Answer the question fully without ever uttering the banned word. Use synonyms, paraphrase, or describe around it."
+    shape: single_turn
+    sample_weight: 0.10
+    examples:
+      - "Tell me about pasta but don't say the word 'Italian'."
+      - "Explain how email works without using the word 'computer'."
+      - "Recommend a vacation idea but never say the word 'beach'."
+      - "Tell me about basketball without using the word 'sport'."
+      - "Explain why people love coffee but don't use the word 'caffeine'."
+      - "Tell me about music without using the word 'song'."
+      - "Describe winter without using the word 'cold'."
+
+  framing:
+    description: "User requires the response to start with a specific phrase OR end with a specific phrase."
+    approach: "Use the required opener or closer verbatim, then answer the question. Don't paraphrase the required phrase."
+    shape: single_turn
+    sample_weight: 0.10
+    examples:
+      - "Tell me about Mars and start your answer with 'Well, here is the thing'."
+      - "Explain how a microwave works and end with the phrase 'and that is the magic'."
+      - "Tell me a quick joke and start it with 'Get this'."
+      - "Recommend something to watch tonight and end your answer with 'happy viewing'."
+      - "Tell me about the moon and begin with 'Believe it or not'."
+      - "Give me a fact about whales and end with 'pretty wild, right'."
+      - "Describe your favorite hobby and start with 'You know what'."
+
+  answer_property:
+    description: "User constrains the FORM of the answer — a single word, only a number, only yes/no, only a name, etc."
+    approach: "Match the required form exactly. If asked for one word, give one word — no preamble, no explanation, no full sentence."
+    shape: single_turn
+    sample_weight: 0.10
+    examples:
+      - "What is the capital of Japan? Answer with just the city name, nothing else."
+      - "How many planets are in our solar system? Just give me the number."
+      - "Is a whale a fish? One word answer, please."
+      - "Name a famous painter — first name only."
+      - "What year did World War Two end? Just the year."
+      - "Pick a color. One word."
+      - "How many days in a leap year? Number only."
+
   multi_step_instructions:
-    description: "First do X, then Y, finally Z"
-    num_conversations: 800
+    description: "In one user turn, user names multiple distinct operations to perform in order. Assistant must complete every step in the order requested."
+    approach: "Execute every named step, in the order given, in a single response. Do not skip a step. Verbally signal transitions ('first... then... finally...')."
+    shape: single_turn
+    sample_weight: 0.10
     examples:
       - "Give me three fun facts about dolphins, then rank them from most to least surprising, then explain why you ranked them that way."
-      - "Name 5 countries in Europe, then for each one, tell me their capital and one famous landmark."
-      - "First, summarize what photosynthesis is in one sentence. Then explain each step. Then give me an analogy for it."
-      - "List the steps to make pasta. Then go back and add timing for each step. Then suggest one variation."
-    approach: >
-      Model must complete ALL steps in order. User should sometimes catch
-      missed steps: "Wait, you forgot the second part."
+      - "Tell me what photosynthesis is in one sentence, then list the inputs, then list the outputs."
+      - "Name a country in South America, then tell me its capital, then name one famous food from there."
+      - "Pick a movie from the nineties, summarize the plot in two sentences, then say whether you would recommend it."
+      - "Tell me what time zone Tokyo is in, then tell me what time it is there if it is three p.m. in New York, then name one thing Tokyo is famous for."
+      - "List the steps to brew a cup of coffee, then estimate how long each step takes, then suggest one variation."
 
-  format_constraints:
-    description: "Answer in specific formats — lists, counts, lengths"
-    num_conversations: 600
-    examples:
-      - "Give me exactly 5 reasons to exercise, no more, no less."
-      - "Explain quantum computing in exactly 3 sentences."
-      - "List the planets in order from the sun. Number each one."
-      - "Give me a pros and cons list for working from home, with exactly 4 items on each side."
-      - "Answer my next 3 questions with only one word each."
-      - "Explain machine learning using only words a 5-year-old would know."
+  # =========================================================================
+  # MULTI-TURN SHAPES — rule spans multiple turns
+  # =========================================================================
 
-  conditional_triggers:
-    description: "Persistent trigger-based behavior changes throughout conversation"
-    num_conversations: 800
+  persistent_rule:
+    description: "User installs a rule (or 2-3 stacked rules) that applies to every subsequent assistant turn for the rest of the conversation."
+    approach: "Acknowledge the rule briefly, then apply it on EVERY subsequent response — not just the first. If multiple rules are stacked, satisfy ALL of them on every applicable turn."
+    shape: multi_turn
+    sample_weight: 0.10
     examples:
-      - "Whenever I mention an animal, tell me a fun fact about it."
-      - "If my question contains a number, answer in exactly that many words."
-      - "When I say 'switch', change from formal to casual language. When I say 'switch' again, go back."
-      - "Every time I mention a country, also tell me its population."
-      - "If the answer is a number, say it in words. If it's a name, spell it out."
-      - "Whenever I ask about food, also suggest a drink pairing."
-      - "If I sound frustrated, acknowledge my frustration before answering."
-    approach: >
-      Expanded from conditional_instructions. AudioMC shows conditional
-      instruction following is "a distinct, harder sub-problem." These are
-      PERSISTENT triggers that must fire reliably across the entire conversation
-      — not just once. The trigger fires on turns 3, 5, 7, etc. whenever
-      the condition is met. Include triggers based on: topic keywords,
-      question types, specific phrases, user emotional cues. The user should
-      catch missed triggers: "Hey, I mentioned a dog — where's my fun fact?"
+      - "From now on, end every response with a fun fact."
+      - "For the rest of our chat, keep every response to exactly two sentences."
+      - "Going forward, start every reply with the word 'Sure'."
+      - "From here on, every time you answer, include a specific number somewhere."
+      - "From now on, mention a different fruit in every response."
+      - "Keep every reply under thirty words AND end every reply with a question."
+      - "Use only words a ten-year-old would know AND start every response with 'Right'."
+      - "Every response from here on should be exactly three sentences AND include the word 'actually'."
 
-  constraint_satisfaction:
-    description: "Answer under specific constraints"
-    num_conversations: 500
+  conditional_trigger:
+    description: "User installs a rule that fires ONLY on turns where a specific keyword appears in their message. Some turns trigger the rule, others don't."
+    approach: "Listen for the trigger keyword in each user turn. When it fires, apply the conditional behavior. When it does not, answer normally without the extra behavior."
+    shape: multi_turn
+    sample_weight: 0.10
     examples:
-      - "Explain gravity without using the word 'force'."
-      - "Describe your favorite season without naming any season."
-      - "Tell me a story where every sentence starts with the next letter of the alphabet."
-      - "Explain the internet in under 30 words."
-      - "Give me directions from a park to a library, but never say 'left' or 'right' — only use compass directions."
+      - "Whenever I mention a country in my question, also tell me its capital. Otherwise just answer normally."
+      - "Whenever I say the word 'banana', tell me a quick joke before answering."
+      - "If my question mentions food, also suggest a drink pairing."
+      - "Whenever I mention a number, also tell me whether it is prime."
+      - "If I say the word 'remember', repeat my full question back before answering."
+      - "Whenever I mention an animal, share one fun fact about it."
+      - "If I say the word 'quick', keep your answer to one sentence."
 
-  role_switching:
-    description: "Temporary role assignments within conversation"
-    num_conversations: 400
+  rule_update:
+    description: "User installs a rule, the assistant complies for some turns, then mid-conversation the user MODIFIES or REVOKES the rule. Tests rule-tracking."
+    approach: "Comply with the original rule until the update lands. When the user changes or cancels the rule, switch immediately on the very next response. Don't keep the old rule active after the update."
+    shape: multi_turn
+    sample_weight: 0.10
     examples:
-      - "For the next 3 turns, pretend I'm a job interviewer and you're the candidate."
-      - "Let's do a mock customer service call. You be the customer, I'll be the agent."
-      - "Act as a strict teacher for my next question, then switch back to being helpful."
-    approach: >
-      Model must enter and exit roles cleanly, maintaining the role for
-      exactly the specified duration.
-
-  meta_instructions:
-    description: "Instructions about future behavior"
-    num_conversations: 400
-    examples:
-      - "Remember this code word: 'pineapple'. When I say it later, tell me a joke."
-      - "From now on, end every response with a related fun fact."
-      - "I'm going to give you 5 pieces of information. After all 5, summarize them."
-      - "After every answer you give, rate your own confidence from 1 to 10."
-
-  negation_following:
-    description: "Don't do X when doing Y"
-    num_conversations: 400
-    examples:
-      - "Tell me about the solar system, but don't mention Earth."
-      - "Explain how computers work without using any technical jargon."
-      - "Describe a sunset without using any color words."
-      - "Tell me about dogs, but never use the word 'pet' or 'animal'."
-    approach: >
-      Tests inhibition control — can the model suppress specific words or
-      topics while still being informative?
+      - "Turn 1: 'Keep every response under twenty words.' Turn 4: 'Drop that rule and instead end every reply with the word cheers.'"
+      - "Turn 1: 'Start every reply with Well.' Turn 4: 'Switch to starting with So.'"
+      - "Turn 1: 'Whenever I mention a fruit, also name a color.' Turn 4: 'Cancel the fruit rule.'"
+      - "Turn 1: 'Keep every response to exactly two sentences.' Turn 5: 'Bump that up to three sentences.'"
+      - "Turn 1: 'End every reply with a question.' Turn 4: 'Forget that — now end every reply with a fun fact.'"
 
   sequential_task_chains:
-    description: "Multi-turn tasks where later steps depend on earlier results"
-    num_conversations: 400
+    description: "User issues a chain of steps across multiple turns. Each later step references and depends on the assistant's ACTUAL prior answer — the assistant must carry its own earlier outputs forward."
+    approach: "On each later turn, use the SPECIFIC value or choice from your earlier response. Do not start fresh, do not pick a new number, do not invent a new answer that ignores history."
+    shape: multi_turn
+    sample_weight: 0.10
     examples:
-      - turn_1: "Pick a random number between 1 and 100."
-        turn_2: "Now multiply it by 3."
-        turn_3: "Subtract 7 from that."
+      - turn_1: "Pick a random number between one and one hundred."
+        turn_2: "Now multiply it by three."
+        turn_3: "Subtract seven from that."
         turn_4: "Is the result even or odd?"
-      - turn_1: "Choose a historical figure."
+      - turn_1: "Choose a famous historical figure."
         turn_2: "What year were they born?"
         turn_3: "What else happened that year?"
-        turn_4: "How might that event have influenced their life?"
+        turn_4: "How might that event have shaped them?"
+      - turn_1: "Pick a city in Europe."
+        turn_2: "What is a famous landmark there?"
+        turn_3: "Roughly when was it built?"
+        turn_4: "Who designed it?"
+      - turn_1: "Give me a number between five and twenty."
+        turn_2: "Square it."
+        turn_3: "Add ten to that."
+        turn_4: "What is the final result?"
 
-  # --- NEW: Benchmark gap-filling categories (v4) ---
-
-  stacked_constraints:
-    description: "3-5 constraints active simultaneously across entire conversation"
-    num_conversations: 500
-    examples:
-      - constraints:
-          - "Keep all responses under 50 words"
-          - "Include exactly one question in each response"
-          - "Never use the word 'the'"
-          - "End each response with a fun fact"
-        test_turns: ["Tell me about the solar system", "How do volcanoes work?", "Explain photosynthesis"]
-      - constraints:
-          - "Respond only in bullet points"
-          - "Each bullet must start with a verb"
-          - "Include at least one statistic per response"
-        test_turns: ["How can I get fitter?", "What about diet?", "And sleep?"]
-      - constraints:
-          - "Use only words a 10-year-old would know"
-          - "Include one analogy per response"
-          - "Keep each response to exactly 3 sentences"
-        test_turns: ["How does WiFi work?", "What about gravity?", "Why is the sky blue?"]
-    approach: >
-      User establishes 3-5 constraints in turns 1-2, then asks 6-10 questions.
-      Model must satisfy ALL constraints simultaneously on EVERY turn.
-      The user actively monitors: "Hey, that was over 50 words!" or
-      "You forgot the fun fact!" The model corrects immediately.
-      Difficulty progression: start with 2 constraints, build to 5.
-      Include conflicting-seeming constraints that are actually compatible
-      (forces the model to think about how to satisfy all at once).
-
-  multi_query_instructions:
-    description: "Multiple questions in one turn, each needing individual treatment"
-    num_conversations: 400
-    examples:
-      - instruction: "For each question I ask, give one counterargument and one supporting point."
-        multi_turn: "Is remote work productive? And is it good for mental health?"
-        model_should: "Address BOTH questions separately, each with its own counterargument and supporting point — 4 items total"
-      - instruction: "Rate each topic from 1-10 for difficulty."
-        multi_turn: "What about calculus, basic algebra, and statistics?"
-        model_should: "Rate all three: calculus 8, algebra 3, statistics 6"
-      - instruction: "For every item I mention, suggest an alternative."
-        multi_turn: "I'm thinking pasta for dinner and maybe a movie afterward."
-        model_should: "Suggest an alternative for pasta AND an alternative for the movie — not just one"
-    approach: >
-      AudioMC shows models fail when users ask 2-3 questions in one turn
-      with a per-question instruction. Models typically only address ONE.
-      This data trains the model to identify and respond to EACH question
-      or item individually. Include: 2-question turns (common), 3-question
-      turns (harder), and mixed-format turns where questions and statements
-      are interleaved. The user catches misses: "You only answered one of
-      my questions."
-
+# =========================================================================
+# Shared traits
+# =========================================================================
 assistant_traits:
-  default_persona: "precise, follows instructions exactly, acknowledges constraints"
-  tts_instruct_templates:
-    default: "clear, structured, organized delivery"
-    listing: "numbered delivery, pause between items"
-    constrained: "careful, deliberate, aware of restrictions"
+  default_persona: "precise, follows instructions exactly, never refuses, never complains about constraints"
+  default_tts: "clear, structured, organized delivery"
 
 user_traits:
   types:
@@ -175,12 +193,13 @@ user_traits:
     playful_challenger: {probability: 0.20, tts: "fun, creative, curious"}
 
 conversation_structure:
-  min_turns: 4
-  max_turns: 10
-  typical_turns: 6
+  # Default range; per-shape overrides applied in code
+  min_turns: 3
+  max_turns: 8
+  typical_turns: 5
   backchannel_probability: 0.2
 
-data_type_override:
-  standard: 0.80
-  long_form: 0.10
-  dynamic: 0.10
+# Probability that a multi-turn conversation includes ONE intentional slip
+# that the user catches and the assistant corrects. Single-turn shapes never
+# slip (no room for a recovery turn).
+slip_probability: 0.20

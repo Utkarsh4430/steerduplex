@@ -1050,6 +1050,35 @@ def _pick_model() -> str:
     return _model_choices[-1][0]  # fallback to last
 
 
+def setup_llm_client(cfg: dict) -> None:
+    """Initialize the shared OpenAI client and weighted model list on this module.
+
+    Category-specific scripts (B4/B5/B11/...) call this from their `main()`
+    instead of poking at module-level globals directly.
+    """
+    global _client, _model_choices
+    base_url = cfg.get("llm_base_url") or None
+    api_key = cfg.get("llm_api_key") or None
+    _client = OpenAI(base_url=base_url, api_key=api_key)
+
+    llm_models_cfg = cfg.get("llm_models")
+    if llm_models_cfg and isinstance(llm_models_cfg, list):
+        total_weight = sum(m.get("weight", 1.0) for m in llm_models_cfg)
+        cum = 0.0
+        choices: list[tuple[str, float]] = []
+        for m in llm_models_cfg:
+            cum += m.get("weight", 1.0) / total_weight
+            choices.append((m["model"], cum))
+        _model_choices = choices
+        names = [m["model"] for m in llm_models_cfg]
+        weights = [m.get("weight", 1.0) for m in llm_models_cfg]
+        print(f"LLM models: {list(zip(names, weights))}")
+    else:
+        model = cfg["llm_model"]
+        _model_choices = [(model, 1.0)]
+        print(f"LLM model: {model}")
+
+
 # ---------------------------------------------------------------------------
 # LLM call via OpenAI SDK (pointing at LiteLLM proxy) with retry + backoff
 # ---------------------------------------------------------------------------
@@ -1060,8 +1089,16 @@ def call_llm(
     max_tokens: int,
     max_retries: int = 3,
     retry_wait_sec: float = 5.0,
+    validate_fn=None,
 ) -> str | None:
-    """Call the LLM via OpenAI SDK with retry logic. Returns raw text or None."""
+    """Call the LLM via OpenAI SDK with retry logic. Returns raw text or None.
+
+    If `validate_fn` is provided, it is called on the response text. The call
+    is retried whenever `validate_fn(content)` returns None or False (e.g.,
+    JSON parse failure, missing required fields). Without a validator, only
+    API-level errors trigger retries — which is why parse failures used to
+    leak through as silent slot drops.
+    """
     # GPT-5.x models only support temperature=1
     model_temp = 1.0 if "gpt-5" in model else temperature
 
@@ -1073,7 +1110,20 @@ def call_llm(
                 temperature=model_temp,
                 max_tokens=max_tokens,
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
+
+            if validate_fn is not None:
+                result = validate_fn(content)
+                if result is None or result is False:
+                    if attempt < max_retries - 1:
+                        print(f"  [INVALID OUTPUT] retry {attempt + 1}/{max_retries} (raw_len={len(content)})")
+                        time.sleep(2)
+                        continue
+                    else:
+                        print(f"  [FAIL] validation never passed after {max_retries} attempts (raw_len={len(content)})")
+                        return None
+
+            return content
 
         except openai.RateLimitError:
             wait = retry_wait_sec * (2 ** attempt)
